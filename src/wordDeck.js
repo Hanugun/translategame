@@ -1,0 +1,90 @@
+export const DECKS = [
+  {
+    id: "en-ru",
+    label: "English -> Russian",
+    from: { label: "English", flag: "🇺🇸" },
+    to: { label: "Russian", flag: "🇷🇺" },
+    promptLangLabel: "English",
+    answerLangLabel: "Russian",
+    answerSpeechLang: "ru-RU",
+    items: [
+      { prompt: "house", answers: ["дом"] },
+      { prompt: "apple", answers: ["яблоко"] },
+      { prompt: "water", answers: ["вода"] },
+      { prompt: "sun", answers: ["солнце"] },
+      { prompt: "moon", answers: ["луна"] },
+      { prompt: "friend", answers: ["друг", "подруга"] },
+      { prompt: "family", answers: ["семья"] },
+      { prompt: "school", answers: ["школа"] },
+      { prompt: "book", answers: ["книга"] },
+      { prompt: "car", answers: ["машина", "автомобиль"] },
+      { prompt: "money", answers: ["деньги"] },
+      { prompt: "time", answers: ["время"] },
+      { prompt: "city", answers: ["город"] },
+      { prompt: "work", answers: ["работа"] },
+      { prompt: "music", answers: ["музыка"] },
+      { prompt: "food", answers: ["еда"] },
+      { prompt: "coffee", answers: ["кофе"] },
+      { prompt: "phone", answers: ["телефон"] },
+      { prompt: "dog", answers: ["собака", "пес"] },
+      { prompt: "cat", answers: ["кошка", "кот"] },
+      { prompt: "tree", answers: ["дерево"] },
+      { prompt: "river", answers: ["река"] },
+      { prompt: "road", answers: ["дорога"] },
+      { prompt: "night", answers: ["ночь"] },
+      { prompt: "morning", answers: ["утро"] },
+      { prompt: "winter", answers: ["зима"] },
+      { prompt: "summer", answers: ["лето"] },
+      { prompt: "rain", answers: ["дождь"] },
+      { prompt: "wind", answers: ["ветер"] },
+      { prompt: "smile", answers: ["улыбка"] }
+    ]
+  },
+  {
+    id: "ru-en",
+    label: "Russian -> English",
+    from: { label: "Russian", flag: "🇷🇺" },
+    to: { label: "English", flag: "🇺🇸" },
+    promptLangLabel: "Russian",
+    answerLangLabel: "English",
+    answerSpeechLang: "en-US",
+    items: [
+      { prompt: "дом", answers: ["house", "home"] },
+      { prompt: "яблоко", answers: ["apple"] },
+      { prompt: "вода", answers: ["water"] },
+      { prompt: "солнце", answers: ["sun"] },
+      { prompt: "луна", answers: ["moon"] },
+      { prompt: "друг", answers: ["friend"] },
+      { prompt: "семья", answers: ["family"] },
+      { prompt: "школа", answers: ["school"] },
+      { prompt: "книга", answers: ["book"] },
+      { prompt: "машина", answers: ["car", "auto"] },
+      { prompt: "деньги", answers: ["money"] },
+      { prompt: "время", answers: ["time"] },
+      { prompt: "город", answers: ["city"] },
+      { prompt: "работа", answers: ["work", "job"] },
+      { prompt: "музыка", answers: ["music"] },
+      { prompt: "еда", answers: ["food"] },
+      { prompt: "кофе", answers: ["coffee"] },
+      { prompt: "телефон", answers: ["phone"] },
+      { prompt: "собака", answers: ["dog"] },
+      { prompt: "кошка", answers: ["cat"] },
+      { prompt: "дерево", answers: ["tree"] },
+      { prompt: "река", answers: ["river"] },
+      { prompt: "дорога", answers: ["road"] },
+      { prompt: "ночь", answers: ["night"] },
+      { prompt: "утро", answers: ["morning"] },
+      { prompt: "зима", answers: ["winter"] },
+      { prompt: "лето", answers: ["summer"] },
+      { prompt: "дождь", answers: ["rain"] },
+      { prompt: "ветер", answers: ["wind"] },
+      { prompt: "улыбка", answers: ["smile"] }
+    ]
+  }
+];
+
+export const DEFAULT_DECK_ID = "en-ru";
+
+export function getDeckById(id) {
+  return DECKS.find((deck) => deck.id === id) || DECKS[0];
+}
