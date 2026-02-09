@@ -20,6 +20,7 @@ Goal: record a vertical clip where gameplay and your face are visible at the sam
    - several correct answers in a row (streak growth)
    - at least one miss (to show risk/tension)
 6. End on finish overlay with final score.
+7. Tap `Save Video` (or `Share Video` if available).
 
 ## 3. Recommended 20-30s structure
 

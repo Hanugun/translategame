@@ -10,9 +10,16 @@ const ROUND_MIC_START_DELAY_MS = 170;
 const MIC_AUTO_RETRY_DELAY_MS = 230;
 const MIC_AUTO_RETRY_MIN = 4;
 const GAME_FLASH_CLASSES = ["fx-hit", "fx-miss", "fx-skip"];
+const RECORDING_CHUNK_MS = 250;
+const RECORDING_MIME_CANDIDATES = [
+  "video/webm;codecs=vp9,opus",
+  "video/webm;codecs=vp8,opus",
+  "video/webm"
+];
 
 const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
 const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+const MediaRecorderCtor = window.MediaRecorder;
 
 const app = document.querySelector("#app");
 
@@ -123,6 +130,11 @@ app.innerHTML = `
             <button id="tryAgainBtn" type="button" class="btn btn-start">Try Again</button>
             <button id="finishExitBtn" type="button" class="btn btn-ghost-small">Exit</button>
           </div>
+          <div class="finish-video-actions">
+            <button id="saveVideoBtn" type="button" class="btn btn-ghost-small" disabled>Save Video</button>
+            <button id="shareVideoBtn" type="button" class="btn btn-ghost-small" disabled>Share Video</button>
+          </div>
+          <p id="videoActionHint" class="video-action-hint">No run video yet.</p>
         </div>
       </section>
     </section>
@@ -176,7 +188,10 @@ const els = {
   finishTitle: document.querySelector("#finishTitle"),
   finishStats: document.querySelector("#finishStats"),
   tryAgainBtn: document.querySelector("#tryAgainBtn"),
-  finishExitBtn: document.querySelector("#finishExitBtn")
+  finishExitBtn: document.querySelector("#finishExitBtn"),
+  saveVideoBtn: document.querySelector("#saveVideoBtn"),
+  shareVideoBtn: document.querySelector("#shareVideoBtn"),
+  videoActionHint: document.querySelector("#videoActionHint")
 };
 
 const state = {
@@ -190,7 +205,25 @@ const state = {
   listening: false,
   stopListeningRequested: false,
   audioCtx: null,
-  audioSupported: Boolean(AudioContextCtor)
+  audioMasterGain: null,
+  audioSupported: Boolean(AudioContextCtor),
+  recordingSupported: Boolean(
+    navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getDisplayMedia === "function" &&
+      MediaRecorderCtor
+  ),
+  shareSupported: Boolean(navigator.share && typeof File !== "undefined"),
+  captureStream: null,
+  recorder: null,
+  recordingChunks: [],
+  recordingBlob: null,
+  recordingUrl: "",
+  recordingFilename: "",
+  recordingProcessing: false,
+  pendingDiscardRecording: false,
+  recordingMixDestination: null,
+  recordingMicStream: null,
+  recordingMicSource: null
 };
 
 init();
@@ -201,6 +234,7 @@ function init() {
   renderLeaderboard();
   setupRecognition();
   applyVoiceSupportState();
+  updateFinishVideoActions();
   bindEvents();
   setStatus(defaultHomeStatus());
 }
@@ -287,13 +321,24 @@ function bindEvents() {
     exitToHome();
   });
 
+  els.saveVideoBtn.addEventListener("click", () => {
+    saveRunVideo();
+  });
+
+  els.shareVideoBtn.addEventListener("click", () => {
+    shareRunVideo();
+  });
+
   els.switchCameraBtn.addEventListener("click", () => {
     toggleCameraFacing();
   });
 
   window.addEventListener("beforeunload", () => {
+    stopRunRecording({ discard: true });
     teardownRun();
     stopCamera();
+    stopCaptureStream();
+    clearRunVideoArtifact();
   });
 }
 
@@ -356,6 +401,9 @@ function openGameFromHome() {
 
 function prepareRun() {
   teardownRun();
+  clearRunVideoArtifact();
+  state.recordingProcessing = false;
+  updateFinishVideoActions();
 
   const deck = getDeckById(state.settings.deckId);
   const words = pickWords(deck.items, state.settings.wordCount);
@@ -415,7 +463,8 @@ function showReadyOverlay() {
     `${deck.from.flag} ${deck.promptLangLabel} -> ${deck.to.flag} ${deck.answerLangLabel}`,
     `${state.settings.wordCount} words`,
     `${state.settings.roundSeconds}s per word`,
-    `say "skip" or "дальше" to skip`
+    `say "skip" or "дальше" to skip`,
+    `allow screen capture if you want save/share video`
   ];
 
   els.readyDetails.textContent = details.join(" | ");
@@ -423,8 +472,11 @@ function showReadyOverlay() {
   els.readyOverlay.focus();
 }
 
-function startRunNow() {
+async function startRunNow() {
   if (!state.run) {
+    return;
+  }
+  if (state.run.active) {
     return;
   }
 
@@ -432,6 +484,7 @@ function startRunNow() {
   els.finishOverlay.classList.add("hidden");
 
   ensureAudioContext();
+  await startRunRecording();
   state.run.active = true;
   state.run.finished = false;
 
@@ -638,6 +691,7 @@ function finishRun(deckCompleted) {
   state.run.active = false;
   teardownRoundTimers();
   stopListening();
+  stopRunRecording();
 
   const accuracy = state.run.totalAnswered
     ? Math.round((state.run.totalCorrect / state.run.totalAnswered) * 100)
@@ -646,6 +700,7 @@ function finishRun(deckCompleted) {
   els.finishTitle.textContent = deckCompleted ? "Deck Cleared" : "Run Over";
   els.finishStats.textContent = `Score: ${state.run.score} | Best streak: ${state.run.bestStreak} | Accuracy: ${accuracy}%`;
   els.finishOverlay.classList.remove("hidden");
+  updateFinishVideoActions();
 
   pushLeaderboardEntry({
     score: state.run.score,
@@ -663,12 +718,14 @@ function finishRun(deckCompleted) {
 function exitToHome() {
   teardownRun();
   stopCamera();
+  stopCaptureStream();
   switchScreen("home");
   renderLeaderboard();
   setStatus(defaultHomeStatus());
 }
 
 function teardownRun() {
+  stopRunRecording({ discard: true });
   stopListening();
   teardownRoundTimers();
 
@@ -877,10 +934,466 @@ function stopCamera() {
   els.cameraVideo.srcObject = null;
 }
 
+function stopCaptureStream() {
+  if (!state.captureStream) {
+    return;
+  }
+
+  for (const track of state.captureStream.getTracks()) {
+    track.stop();
+  }
+  state.captureStream = null;
+}
+
 function toggleCameraFacing() {
   state.cameraFacingMode = state.cameraFacingMode === "user" ? "environment" : "user";
   if (!els.gameScreen.classList.contains("hidden")) {
     startCamera();
+  }
+}
+
+function pickRecordingMimeType() {
+  if (!MediaRecorderCtor || typeof MediaRecorderCtor.isTypeSupported !== "function") {
+    return "";
+  }
+
+  for (const mimeType of RECORDING_MIME_CANDIDATES) {
+    if (MediaRecorderCtor.isTypeSupported(mimeType)) {
+      return mimeType;
+    }
+  }
+  return "";
+}
+
+function buildRecordingFilename(mimeType = "video/webm") {
+  const extension = mimeType.includes("mp4") ? "mp4" : "webm";
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `word-rush-${stamp}.${extension}`;
+}
+
+function clearRunVideoArtifact() {
+  if (state.recordingUrl) {
+    URL.revokeObjectURL(state.recordingUrl);
+  }
+  state.recordingBlob = null;
+  state.recordingUrl = "";
+  state.recordingFilename = "";
+}
+
+function buildShareableRecordingFile() {
+  if (!state.recordingBlob || typeof File === "undefined") {
+    return null;
+  }
+  const mimeType = state.recordingBlob.type || "video/webm";
+  const filename = state.recordingFilename || buildRecordingFilename(mimeType);
+  return new File([state.recordingBlob], filename, {
+    type: mimeType,
+    lastModified: Date.now()
+  });
+}
+
+function canShareRecordingFile() {
+  if (!state.shareSupported || !state.recordingBlob) {
+    return false;
+  }
+
+  const file = buildShareableRecordingFile();
+  if (!file) {
+    return false;
+  }
+
+  if (typeof navigator.canShare === "function") {
+    try {
+      return navigator.canShare({ files: [file] });
+    } catch {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function updateFinishVideoActions() {
+  if (!els.saveVideoBtn || !els.shareVideoBtn || !els.videoActionHint) {
+    return;
+  }
+
+  if (!state.recordingSupported) {
+    els.saveVideoBtn.disabled = true;
+    els.shareVideoBtn.disabled = true;
+    els.shareVideoBtn.title = "Share is unavailable on this browser.";
+    els.videoActionHint.textContent = "Browser recording not supported. Use phone screen recording.";
+    return;
+  }
+
+  if (state.recordingProcessing) {
+    els.saveVideoBtn.disabled = true;
+    els.shareVideoBtn.disabled = true;
+    els.shareVideoBtn.title = "";
+    els.videoActionHint.textContent = "Processing run video...";
+    return;
+  }
+
+  const hasVideo = Boolean(state.recordingBlob && state.recordingUrl);
+  els.saveVideoBtn.disabled = !hasVideo;
+
+  const shareReady = hasVideo && canShareRecordingFile();
+  els.shareVideoBtn.disabled = !shareReady;
+  els.shareVideoBtn.title = shareReady ? "" : "Share file flow is unavailable on this device/browser.";
+
+  if (!hasVideo) {
+    els.videoActionHint.textContent = "No run video yet. Allow tab capture when run starts.";
+  } else if (!shareReady) {
+    els.videoActionHint.textContent = "Clip ready. Save video, then upload to TikTok/Instagram.";
+  } else {
+    els.videoActionHint.textContent = "Clip ready. Save or share.";
+  }
+}
+
+async function ensureCaptureStream() {
+  if (!state.recordingSupported) {
+    return null;
+  }
+
+  const hasActiveVideo =
+    state.captureStream &&
+    state.captureStream.getVideoTracks().some((track) => track.readyState === "live");
+  if (hasActiveVideo) {
+    return state.captureStream;
+  }
+
+  stopCaptureStream();
+  setStatus('Select "This tab" in the picker to capture this run.');
+
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        frameRate: { ideal: 30, max: 30 }
+      },
+      audio: true
+    });
+
+    const [videoTrack] = stream.getVideoTracks();
+    if (videoTrack) {
+      videoTrack.addEventListener("ended", () => {
+        stopCaptureStream();
+        if (isRunActive()) {
+          setStatus("Screen capture stopped. Run continues without recording.");
+        }
+      });
+    }
+
+    state.captureStream = stream;
+    return stream;
+  } catch (error) {
+    if (error && (error.name === "AbortError" || error.name === "NotAllowedError")) {
+      setStatus("Run recording skipped.");
+    } else {
+      setStatus("Screen capture failed. Run continues without recording.");
+    }
+    return null;
+  }
+}
+
+function teardownRecordingAudioMix() {
+  if (state.recordingMicSource) {
+    try {
+      state.recordingMicSource.disconnect();
+    } catch {
+      // Ignore disconnect errors from stale nodes.
+    }
+    state.recordingMicSource = null;
+  }
+
+  if (state.audioMasterGain && state.recordingMixDestination) {
+    try {
+      state.audioMasterGain.disconnect(state.recordingMixDestination);
+    } catch {
+      // Ignore disconnect errors from stale nodes.
+    }
+  }
+
+  if (state.recordingMixDestination) {
+    for (const track of state.recordingMixDestination.stream.getTracks()) {
+      track.stop();
+    }
+    state.recordingMixDestination = null;
+  }
+
+  if (state.recordingMicStream) {
+    for (const track of state.recordingMicStream.getTracks()) {
+      track.stop();
+    }
+    state.recordingMicStream = null;
+  }
+}
+
+async function ensureRecordingMicStream() {
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    return null;
+  }
+
+  const hasActiveMic =
+    state.recordingMicStream &&
+    state.recordingMicStream.getAudioTracks().some((track) => track.readyState === "live");
+  if (hasActiveMic) {
+    return state.recordingMicStream;
+  }
+
+  if (state.recordingMicStream) {
+    for (const track of state.recordingMicStream.getTracks()) {
+      track.stop();
+    }
+  }
+
+  try {
+    state.recordingMicStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      },
+      video: false
+    });
+    return state.recordingMicStream;
+  } catch {
+    state.recordingMicStream = null;
+    return null;
+  }
+}
+
+async function buildRecorderInputStream(displayStream) {
+  const recorderInputStream = new MediaStream();
+
+  for (const track of displayStream.getVideoTracks()) {
+    recorderInputStream.addTrack(track);
+  }
+
+  const audioCtx = ensureAudioContext();
+  if (!audioCtx || !state.audioMasterGain) {
+    return { recorderInputStream, hasAudio: false, hasMic: false };
+  }
+
+  teardownRecordingAudioMix();
+
+  state.recordingMixDestination = audioCtx.createMediaStreamDestination();
+  try {
+    state.audioMasterGain.connect(state.recordingMixDestination);
+  } catch {
+    // Keep going without duplicate mix connection.
+  }
+
+  let hasMic = false;
+  const micStream = await ensureRecordingMicStream();
+  if (micStream) {
+    try {
+      state.recordingMicSource = audioCtx.createMediaStreamSource(micStream);
+      state.recordingMicSource.connect(state.recordingMixDestination);
+      hasMic = true;
+    } catch {
+      hasMic = false;
+      state.recordingMicSource = null;
+    }
+  }
+
+  const [mixTrack] = state.recordingMixDestination.stream.getAudioTracks();
+  if (mixTrack) {
+    recorderInputStream.addTrack(mixTrack);
+    return { recorderInputStream, hasAudio: true, hasMic };
+  }
+
+  return { recorderInputStream, hasAudio: false, hasMic: false };
+}
+
+async function startRunRecording() {
+  if (!state.recordingSupported || !state.run) {
+    updateFinishVideoActions();
+    return;
+  }
+
+  clearRunVideoArtifact();
+  state.recordingChunks = [];
+  state.pendingDiscardRecording = false;
+  state.recordingProcessing = false;
+  updateFinishVideoActions();
+
+  const stream = await ensureCaptureStream();
+  if (!stream) {
+    return;
+  }
+
+  const { recorderInputStream, hasAudio, hasMic } = await buildRecorderInputStream(stream);
+  const preferredMimeType = pickRecordingMimeType();
+  let recorder;
+  try {
+    recorder = preferredMimeType
+      ? new MediaRecorderCtor(recorderInputStream, { mimeType: preferredMimeType })
+      : new MediaRecorderCtor(recorderInputStream);
+  } catch {
+    teardownRecordingAudioMix();
+    setStatus("Recorder init failed. Use system screen recording.");
+    return;
+  }
+
+  state.recorder = recorder;
+  recorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) {
+      state.recordingChunks.push(event.data);
+    }
+  };
+  recorder.onerror = () => {
+    if (state.recorder === recorder) {
+      state.recorder = null;
+    }
+    teardownRecordingAudioMix();
+    state.recordingProcessing = false;
+    setStatus("Recorder error. Use system screen recording.");
+    updateFinishVideoActions();
+  };
+  recorder.onstop = () => {
+    const shouldDiscard = state.pendingDiscardRecording;
+    const stoppedMimeType = recorder.mimeType || preferredMimeType || "video/webm";
+
+    if (state.recorder === recorder) {
+      state.recorder = null;
+    }
+    state.pendingDiscardRecording = false;
+    teardownRecordingAudioMix();
+
+    if (shouldDiscard) {
+      state.recordingChunks = [];
+      state.recordingProcessing = false;
+      clearRunVideoArtifact();
+      updateFinishVideoActions();
+      return;
+    }
+
+    if (!state.recordingChunks.length) {
+      state.recordingProcessing = false;
+      updateFinishVideoActions();
+      return;
+    }
+
+    clearRunVideoArtifact();
+    state.recordingBlob = new Blob(state.recordingChunks, { type: stoppedMimeType });
+    state.recordingFilename = buildRecordingFilename(stoppedMimeType);
+    state.recordingUrl = URL.createObjectURL(state.recordingBlob);
+    state.recordingChunks = [];
+    state.recordingProcessing = false;
+    updateFinishVideoActions();
+  };
+
+  try {
+    recorder.start(RECORDING_CHUNK_MS);
+    if (hasAudio && hasMic) {
+      setStatus("Run recording started with game audio + mic.");
+    } else if (hasAudio) {
+      setStatus("Run recording started with game audio.");
+    } else {
+      setStatus("Run recording started (video only).");
+    }
+  } catch {
+    if (state.recorder === recorder) {
+      state.recorder = null;
+    }
+    teardownRecordingAudioMix();
+    setStatus("Could not start recorder.");
+  }
+}
+
+function stopRunRecording({ discard = false } = {}) {
+  if (discard) {
+    state.pendingDiscardRecording = true;
+  }
+
+  if (!state.recorder) {
+    if (discard) {
+      state.recordingChunks = [];
+      clearRunVideoArtifact();
+    }
+    teardownRecordingAudioMix();
+    state.recordingProcessing = false;
+    updateFinishVideoActions();
+    return;
+  }
+
+  if (state.recorder.state === "inactive") {
+    teardownRecordingAudioMix();
+    updateFinishVideoActions();
+    return;
+  }
+
+  state.recordingProcessing = true;
+  updateFinishVideoActions();
+  try {
+    state.recorder.stop();
+  } catch {
+    state.recordingProcessing = false;
+    state.recorder = null;
+    teardownRecordingAudioMix();
+    updateFinishVideoActions();
+  }
+}
+
+function saveRunVideo() {
+  if (!state.recordingBlob || !state.recordingUrl) {
+    setStatus("No run clip to save.");
+    return;
+  }
+
+  const filename = state.recordingFilename || buildRecordingFilename(state.recordingBlob.type);
+  const anchor = document.createElement("a");
+  anchor.href = state.recordingUrl;
+  anchor.download = filename;
+  anchor.rel = "noopener";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setStatus("Video download started.");
+}
+
+async function shareRunVideo() {
+  if (!state.recordingBlob) {
+    setStatus("No run clip to share.");
+    return;
+  }
+
+  if (!state.shareSupported) {
+    setStatus("Share is unavailable. Save video and upload manually.");
+    return;
+  }
+
+  const file = buildShareableRecordingFile();
+  if (!file) {
+    setStatus("Could not prepare file for sharing.");
+    return;
+  }
+
+  if (typeof navigator.canShare === "function") {
+    try {
+      if (!navigator.canShare({ files: [file] })) {
+        setStatus("Direct file share not supported here. Save video first.");
+        return;
+      }
+    } catch {
+      setStatus("Direct file share not supported here. Save video first.");
+      return;
+    }
+  }
+
+  try {
+    await navigator.share({
+      title: "Word Rush Challenge",
+      text: "Can you beat my score?",
+      files: [file]
+    });
+    setStatus("Share sheet opened.");
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      setStatus("Share cancelled.");
+      return;
+    }
+    setStatus("Share failed. Save video and upload manually.");
   }
 }
 
@@ -1338,6 +1851,12 @@ function ensureAudioContext() {
     state.audioCtx = new AudioContextCtor();
   }
 
+  if (!state.audioMasterGain) {
+    state.audioMasterGain = state.audioCtx.createGain();
+    state.audioMasterGain.gain.value = 1;
+    state.audioMasterGain.connect(state.audioCtx.destination);
+  }
+
   if (state.audioCtx.state === "suspended") {
     state.audioCtx.resume();
   }
@@ -1367,7 +1886,11 @@ function playTone({ frequency, duration = 0.12, type = "sine", when = 0, gain = 
   amp.gain.exponentialRampToValueAtTime(0.0001, stopAt);
 
   osc.connect(amp);
-  amp.connect(audioCtx.destination);
+  if (state.audioMasterGain) {
+    amp.connect(state.audioMasterGain);
+  } else {
+    amp.connect(audioCtx.destination);
+  }
   osc.start(startAt);
   osc.stop(stopAt + 0.01);
 }

@@ -728,6 +728,19 @@ body {
   gap: 0.42rem;
 }
 
+.finish-video-actions {
+  margin-top: 0.48rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.42rem;
+}
+
+.video-action-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: #b6ccdd;
+}
+
 .score-item.fx-chip-pop {
   animation: chipPop 260ms ease;
 }

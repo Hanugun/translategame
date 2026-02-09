@@ -8,6 +8,8 @@ Mobile-first vocabulary game for TikTok/Reels style recordings.
 - Voice-only answers (Web Speech API).
 - Voice command to skip word: say `skip`, `dalshe` (`дальше`), or `dalee` (`далее`).
 - Local leaderboard (stored in `localStorage`).
+- Optional in-app run recording (tab capture) with `Save Video` on finish screen.
+- `Share Video` via native share sheet when browser/device supports file sharing.
 - 3-screen flow:
 1. `Home` (description + leaderboard + start + settings)
 2. `Settings` (language, answer time, words per run)
@@ -44,6 +46,14 @@ npm run preview -- --host
 - Camera and microphone need permission.
 - Best support: Chrome / Edge on mobile.
 - If speech recognition is unsupported, start button is disabled.
+
+## Recording notes
+
+- In-app recording asks for screen/tab capture on run start.
+- Choose the current tab to capture gameplay + overlays.
+- Recording now uses an internal audio mix track (game SFX + best-effort mic), so clips still have sound when tab-audio is unavailable.
+- Direct posting to TikTok/Instagram from browser is not guaranteed; standard flow is:
+  `Save Video` -> upload in TikTok/Instagram app.
 
 ## Project structure
 

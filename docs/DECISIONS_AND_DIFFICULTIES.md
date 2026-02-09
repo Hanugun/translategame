@@ -8,6 +8,7 @@
 4. Used camera as full-screen background with transparent game HUD to create social-native look.
 5. Added event-driven animations (hit/miss flashes, chip pulses, urgency timer) to improve viewer retention in short videos.
 6. Persisted settings and leaderboard in `localStorage` for zero-backend MVP.
+7. Added post-run video actions (`Save`/`Share`) using browser capture + `MediaRecorder`.
 
 ## Main difficulties and fixes
 
@@ -23,6 +24,11 @@
    - Moved prompt to bottom-middle and enlarged score/streak/lives.
 4. "Viral" feel requirements for promo recording.
    - Added responsive pacing (road speed by streak), SFX, vibration, and concise on-screen status.
+5. Sharing limitations of social platforms from browser.
+   - Implemented native share-sheet file sharing when available.
+   - Kept reliable fallback: save file locally, then upload in app.
+6. Inconsistent tab-audio capture in browser recording.
+   - Added internal recording audio mix (game SFX + best-effort mic) to avoid silent clips.
 
 ## Remaining known constraints
 
