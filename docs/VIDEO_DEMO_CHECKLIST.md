@@ -1,34 +1,37 @@
-# Demo Checklist (TikTok/Reels)
+# Video Demo Checklist (TikTok / Reels)
 
-Цель: снять вертикальный ролик, где видно геймплей + лицо автора (как в примере).
+Goal: record a vertical clip where gameplay and your face are visible at the same time.
 
-## 1) Подготовка
+## 1. Setup
 
-1. Запустить приложение на телефоне в браузере.
-2. Перевести телефон в портретный режим.
-3. Нажать `Face Cam: OFF` -> `Face Cam: ON`.
-4. Убедиться, что в правом нижнем углу появился мини-кадр с фронтальной камеры.
-5. Нажать `Sound: ON` (для захвата SFX).
+1. Open the app on phone (Chrome/Edge recommended).
+2. Allow camera + microphone permissions.
+3. Keep phone in portrait orientation.
+4. Choose deck/time/word count in `Settings`.
+5. Return to `Home` and tap `Start Challenge`.
 
-## 2) Запись
+## 2. Recording flow
 
-1. Включить системную запись экрана.
-2. Нажать `Start Run`.
-3. Быстро проговаривать переводы, чтобы поддерживать streak.
-4. Сделать 1-2 ошибки специально, чтобы в видео были и `PERFECT`, и `MISS` реакции.
-5. Завершить запись на экране `Run Complete`.
+1. Start system screen recording on the phone.
+2. Enter game screen and `Tap anywhere to start`.
+3. Speak translations quickly and clearly.
+4. Use at least one `skip`/`dalshe` (`дальше`) moment to show the mechanic.
+5. Include both:
+   - several correct answers in a row (streak growth)
+   - at least one miss (to show risk/tension)
+6. End on finish overlay with final score.
 
-## 3) Рекомендованный сценарий ролика (20-30 сек)
+## 3. Recommended 20-30s structure
 
-1. 0-2 сек: стартовый экран + текст-оверлей "Can you beat my streak?"
-2. 3-12 сек: серия быстрых правильных ответов подряд (рост очков, streak, конфетти).
-3. 13-16 сек: один промах + эмоциональная реакция в face cam.
-4. 17-25 сек: камбэк и финиш.
-5. 26-30 сек: финальный экран + call-to-action "Play this challenge with me".
+1. 0-3s: Hook shot on `Home` or game start overlay.
+2. 3-14s: Fast streak build, visible score growth.
+3. 14-18s: One miss / life loss reaction.
+4. 18-25s: Recovery and final push.
+5. 25-30s: End card with score + CTA.
 
-## 4) Монтаж
+## 4. Editing tips
 
-1. Добавить субтитры распознанной фразы и счетчика streak.
-2. Усилить громкость игровых SFX.
-3. Сделать быстрый jump-cut в моменты `PERFECT`.
-4. Финальный кадр оставить на 1.5-2 сек, чтобы зритель успел прочитать CTA.
+1. Keep cuts fast (0.8x-1.1x speed moments work well).
+2. Add subtitles for spoken answers.
+3. Keep game SFX audible.
+4. Add final CTA text: `Can you beat this score?`

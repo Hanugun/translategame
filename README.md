@@ -1,44 +1,24 @@
-﻿# Word Rush Camera Mode (MVP)
+# Word Rush Voice MVP
 
-Voice vocabulary game for TikTok/Reels style recording.
+Mobile-first vocabulary game for TikTok/Reels style recordings.
 
-## Current flow
+## What it does
 
-1. Lobby screen:
-   - game description
-   - local leaderboard (stored in localStorage)
-   - actions: `Start Challenge` and `Settings`
-2. Settings screen:
-   - language direction with flags
-   - answer time
-   - number of words
-   - save/back to lobby
-3. Game screen:
-   - full-screen camera background
-   - transparent HUD and road layer over camera
-   - full-screen dimmed ready overlay: `Tap anywhere to start`
-   - voice-only answer mode
-   - skip voice command: say `skip` or `дальше`
-4. Finish overlay:
-   - final score
-   - max streak
-   - `Try Again` and `Exit`
+- Full-screen camera gameplay with transparent HUD on top.
+- Voice-only answers (Web Speech API).
+- Voice command to skip word: say `skip`, `dalshe` (`дальше`), or `dalee` (`далее`).
+- Local leaderboard (stored in `localStorage`).
+- 3-screen flow:
+1. `Home` (description + leaderboard + start + settings)
+2. `Settings` (language, answer time, words per run)
+3. `Game` (tap anywhere to start, then live run)
+- Finish overlay with score, best streak, accuracy.
 
-## Features
+## Tech stack
 
-- Two language decks:
-  - `🇺🇸 English -> 🇷🇺 Russian`
-  - `🇷🇺 Russian -> 🇺🇸 English`
-- Settings before run:
-  - answer time: `4/6/8/10` sec
-  - word count: `5/10/15/20`
-- Voice recognition with typed fallback.
-- Fuzzy answer matching (including mixed Cyrillic/Latin lookalike fixes, e.g. `дom` -> `дом`).
-- Local leaderboard with run metadata.
-- Camera controls:
-  - fullscreen camera background
-  - pip camera card
-  - camera flip button
+- `Vite`
+- Vanilla JS (`src/main.js`)
+- CSS (`src/style.css`)
 
 ## Run locally
 
@@ -49,33 +29,34 @@ npm run dev -- --host
 
 Open:
 
-- local: `http://localhost:5173`
-- phone in same LAN: `http://<your-pc-ip>:5173`
+- `http://localhost:5173`
+- `http://<your-pc-ip>:5173` on phone in the same LAN
 
-## Build
+## Build / preview
 
 ```bash
 npm run build
 npm run preview -- --host
 ```
 
-## Important browser notes
+## Browser requirements
 
-- Camera and microphone are usually allowed only on `https` or `localhost`.
-- Best voice compatibility is Chrome/Edge.
-- If voice is blocked, use typed fallback input.
+- Camera and microphone need permission.
+- Best support: Chrome / Edge on mobile.
+- If speech recognition is unsupported, start button is disabled.
 
 ## Project structure
 
-- `src/main.js` - app screens, game loop, speech/camera logic, leaderboard
-- `src/style.css` - full UI style (lobby + camera gameplay + overlays)
-- `src/wordDeck.js` - language decks and word lists
-- `docs/VIDEO_DEMO_CHECKLIST.md` - short recording checklist
-- `docs/DECISIONS_AND_DIFFICULTIES.md` - design/implementation notes
+- `index.html` - app shell
+- `src/main.js` - screens, run loop, speech/camera, scoring, leaderboard
+- `src/style.css` - all visuals, mobile layout, animations
+- `src/wordDeck.js` - language decks and words
+- `docs/VIDEO_DEMO_CHECKLIST.md` - how to record promo demo
+- `docs/DECISIONS_AND_DIFFICULTIES.md` - engineering decisions and tradeoffs
 
 ## Tuning
 
-- Add/edit words in `src/wordDeck.js`.
-- Change options in `WORD_COUNT_OPTIONS` and `ROUND_SECONDS_OPTIONS` in `src/main.js`.
-- Adjust scoring in `resolveRound()` in `src/main.js`.
-- Adjust leaderboard size via `MAX_LEADERBOARD_ITEMS` in `src/main.js`.
+- Add/edit words: `src/wordDeck.js`
+- Round options: `WORD_COUNT_OPTIONS`, `ROUND_SECONDS_OPTIONS` in `src/main.js`
+- Scoring formula: `resolveRound()` in `src/main.js`
+- Leaderboard size: `MAX_LEADERBOARD_ITEMS` in `src/main.js`

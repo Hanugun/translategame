@@ -2,9 +2,14 @@
 import { DECKS, DEFAULT_DECK_ID, getDeckById } from "./wordDeck";
 
 const LEADERBOARD_KEY = "word-rush-leaderboard-v3";
+const SETTINGS_KEY = "word-rush-settings-v1";
 const MAX_LEADERBOARD_ITEMS = 20;
 const WORD_COUNT_OPTIONS = [5, 10, 15, 20];
 const ROUND_SECONDS_OPTIONS = [4, 6, 8, 10];
+const ROUND_MIC_START_DELAY_MS = 170;
+const MIC_AUTO_RETRY_DELAY_MS = 230;
+const MIC_AUTO_RETRY_MIN = 4;
+const GAME_FLASH_CLASSES = ["fx-hit", "fx-miss", "fx-skip"];
 
 const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
 const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
@@ -79,10 +84,10 @@ app.innerHTML = `
         </header>
 
         <section class="score-ribbon" aria-label="Game stats">
-          <span class="score-item score-item-score">Score <strong id="scoreValue">0</strong></span>
-          <span class="score-item score-item-streak">Streak <strong id="streakValue">0</strong></span>
-          <span class="score-item score-item-lives">Lives <strong id="livesValue"></strong></span>
-          <span class="score-item score-item-word">Word Left <strong id="wordProgressValue">0</strong></span>
+          <span id="scoreChip" class="score-item score-item-score">Score <strong id="scoreValue">0</strong></span>
+          <span id="streakChip" class="score-item score-item-streak">Streak <strong id="streakValue">0</strong></span>
+          <span id="livesChip" class="score-item score-item-lives">Lives <strong id="livesValue"></strong></span>
+          <span id="wordChip" class="score-item score-item-word">Word Left <strong id="wordProgressValue">0</strong></span>
         </section>
 
         <section class="prompt-stack">
@@ -150,6 +155,10 @@ const els = {
   streakValue: document.querySelector("#streakValue"),
   livesValue: document.querySelector("#livesValue"),
   wordProgressValue: document.querySelector("#wordProgressValue"),
+  scoreChip: document.querySelector("#scoreChip"),
+  streakChip: document.querySelector("#streakChip"),
+  livesChip: document.querySelector("#livesChip"),
+  wordChip: document.querySelector("#wordChip"),
 
   promptWord: document.querySelector("#promptWord"),
   promptMeta: document.querySelector("#promptMeta"),
@@ -171,11 +180,7 @@ const els = {
 };
 
 const state = {
-  settings: {
-    deckId: DEFAULT_DECK_ID,
-    roundSeconds: 6,
-    wordCount: 10
-  },
+  settings: loadSettings(),
   run: null,
   leaderboard: loadLeaderboard(),
   cameraStream: null,
@@ -183,8 +188,8 @@ const state = {
   recognition: null,
   recognitionSupported: false,
   listening: false,
+  stopListeningRequested: false,
   audioCtx: null,
-  muted: false,
   audioSupported: Boolean(AudioContextCtor)
 };
 
@@ -195,8 +200,17 @@ function init() {
   buildSettingSelects();
   renderLeaderboard();
   setupRecognition();
+  applyVoiceSupportState();
   bindEvents();
-  setStatus("Press Start Challenge to begin.");
+  setStatus(defaultHomeStatus());
+}
+
+function applyVoiceSupportState() {
+  if (state.recognitionSupported) {
+    return;
+  }
+  els.startFromHomeBtn.disabled = true;
+  els.startFromHomeBtn.textContent = "Use Chrome for Voice";
 }
 
 function bindEvents() {
@@ -231,15 +245,18 @@ function bindEvents() {
       return;
     }
     state.settings.deckId = target.value;
+    persistSettings();
     syncRunMetaToSettings();
   });
 
   els.roundSecondsSelect.addEventListener("change", () => {
     state.settings.roundSeconds = Number(els.roundSecondsSelect.value);
+    persistSettings();
   });
 
   els.wordCountSelect.addEventListener("change", () => {
     state.settings.wordCount = Number(els.wordCountSelect.value);
+    persistSettings();
   });
 
   els.readyOverlay.addEventListener("click", () => {
@@ -327,6 +344,10 @@ function switchScreen(screen) {
   els.gameScreen.classList.toggle("hidden", !isGame);
 }
 function openGameFromHome() {
+  if (!state.recognitionSupported) {
+    setStatus("Speech recognition is unavailable. Open in Chrome or Edge.");
+    return;
+  }
   prepareRun();
   switchScreen("game");
   showReadyOverlay();
@@ -355,11 +376,17 @@ function prepareRun() {
     nextRoundId: null,
     feedbackResetId: null,
     autoMicId: null,
+    micRetryId: null,
+    micRetriesLeft: getRoundMicRetryLimit(),
+    heardFinalInRound: false,
     currentWord: null,
     roundLocked: true,
     active: false,
     finished: false,
-    lastLivesVisual: 3
+    lastLivesVisual: 3,
+    lastScoreVisual: 0,
+    lastStreakVisual: 0,
+    lastWordsVisual: words.length
   };
 
   els.finishOverlay.classList.add("hidden");
@@ -375,6 +402,7 @@ function prepareRun() {
   updateTimer(1);
   updateHud();
   setStatus("Tap anywhere to start.");
+  els.gameScreen.classList.remove("is-urgent", ...GAME_FLASH_CLASSES);
 }
 
 function showReadyOverlay() {
@@ -424,6 +452,8 @@ function startNextRound() {
   state.run.roundLocked = false;
   state.run.timeLeft = state.settings.roundSeconds;
   state.run.roundStartedAt = performance.now();
+  state.run.heardFinalInRound = false;
+  state.run.micRetriesLeft = getRoundMicRetryLimit();
 
   els.promptWord.textContent = state.run.currentWord.prompt;
   els.correctAnswer.textContent = state.run.currentWord.answers.join(", ");
@@ -433,8 +463,11 @@ function startNextRound() {
   setStatus("Say translation now.");
   updateHud();
   updateTimer(1);
+  pulseElement(els.promptWord, "fx-word-enter");
+  pulseElement(els.wordChip, "fx-chip-pop");
 
   clearRoundTimer();
+  clearMicRetryTimer();
   state.run.roundTimerId = window.setInterval(() => {
     if (!state.run) {
       return;
@@ -461,11 +494,11 @@ function startNextRound() {
       if (state.run) {
         state.run.autoMicId = null;
       }
-    }, 170);
+    }, ROUND_MIC_START_DELAY_MS);
   }
 }
 
-function evaluateAnswerCandidates(rawCandidates, source) {
+function evaluateAnswerCandidates(rawCandidates) {
   if (!isRunActive() || !state.run || state.run.roundLocked || !state.run.currentWord) {
     return;
   }
@@ -493,9 +526,9 @@ function evaluateAnswerCandidates(rawCandidates, source) {
   );
 
   if (isCorrect) {
-    resolveRound(true, "PERFECT", source === "voice" ? "Voice hit" : "Typed hit");
+    resolveRound(true, "PERFECT", "Correct");
   } else {
-    resolveRound(false, "MISS", source === "voice" ? "Voice miss" : "Typed miss");
+    resolveRound(false, "MISS", "Miss");
   }
 }
 
@@ -507,11 +540,15 @@ function resolveSkipRound() {
   state.run.roundLocked = true;
   stopListening();
   clearRoundTimer();
+  clearMicRetryTimer();
   state.run.streak = 0;
 
   setFeedback("SKIP", "neutral");
   setStatus("Skipped by voice command.");
   els.answerLine.classList.remove("hidden");
+  pulseElement(els.wordChip, "fx-chip-pop");
+  pulseElement(els.streakChip, "fx-chip-soft");
+  flashGame("fx-skip");
   updateHud();
   scheduleFeedbackReset();
 
@@ -540,6 +577,7 @@ function resolveRound(isCorrect, badgeText, statusText) {
   state.run.totalAnswered += 1;
   stopListening();
   clearRoundTimer();
+  clearMicRetryTimer();
 
   if (isCorrect) {
     state.run.totalCorrect += 1;
@@ -555,6 +593,9 @@ function resolveRound(isCorrect, badgeText, statusText) {
     setStatus(`${statusText} | +${gain} points`);
     playSuccessSound();
     vibrate([12]);
+    pulseElement(els.scoreChip, "fx-chip-pop");
+    pulseElement(els.streakChip, "fx-chip-hot");
+    flashGame("fx-hit");
   } else {
     state.run.streak = 0;
     state.run.lives -= 1;
@@ -564,6 +605,9 @@ function resolveRound(isCorrect, badgeText, statusText) {
     els.answerLine.classList.remove("hidden");
     playFailSound();
     vibrate([35, 25, 35]);
+    pulseElement(els.livesChip, "fx-chip-shake");
+    pulseElement(els.streakChip, "fx-chip-soft");
+    flashGame("fx-miss");
   }
 
   updateHud();
@@ -621,7 +665,7 @@ function exitToHome() {
   stopCamera();
   switchScreen("home");
   renderLeaderboard();
-  setStatus("Press Start Challenge to begin.");
+  setStatus(defaultHomeStatus());
 }
 
 function teardownRun() {
@@ -632,6 +676,7 @@ function teardownRun() {
   els.finishOverlay.classList.add("hidden");
   els.readyOverlay.classList.add("hidden");
   els.gameScreen.dataset.speed = "0";
+  els.gameScreen.classList.remove("is-urgent");
 }
 
 function teardownRoundTimers() {
@@ -653,6 +698,7 @@ function teardownRoundTimers() {
     window.clearTimeout(state.run.autoMicId);
     state.run.autoMicId = null;
   }
+  clearMicRetryTimer();
 }
 
 function clearRoundTimer() {
@@ -661,6 +707,14 @@ function clearRoundTimer() {
   }
   window.clearInterval(state.run.roundTimerId);
   state.run.roundTimerId = null;
+}
+
+function clearMicRetryTimer() {
+  if (!state.run || !state.run.micRetryId) {
+    return;
+  }
+  window.clearTimeout(state.run.micRetryId);
+  state.run.micRetryId = null;
 }
 
 function scheduleFeedbackReset() {
@@ -691,15 +745,28 @@ function updateHud() {
     return;
   }
 
+  const wordsLeft = Math.max(0, state.run.words.length - state.run.index);
+  if (state.run.score > state.run.lastScoreVisual) {
+    pulseElement(els.scoreChip, "fx-chip-pop");
+  }
+  if (state.run.streak > state.run.lastStreakVisual) {
+    pulseElement(els.streakChip, "fx-chip-hot");
+  }
+  if (wordsLeft < state.run.lastWordsVisual) {
+    pulseElement(els.wordChip, "fx-chip-pop");
+  }
   if (state.run.lives < state.run.lastLivesVisual) {
     animateLivesLoss();
   }
+
+  state.run.lastScoreVisual = state.run.score;
+  state.run.lastStreakVisual = state.run.streak;
+  state.run.lastWordsVisual = wordsLeft;
   state.run.lastLivesVisual = state.run.lives;
 
   els.scoreValue.textContent = String(state.run.score);
   els.streakValue.textContent = String(state.run.streak);
   els.livesValue.innerHTML = renderLives(state.run.lives);
-  const wordsLeft = Math.max(0, state.run.words.length - state.run.index);
   els.wordProgressValue.textContent = String(wordsLeft);
 
   const speedLevel = Math.min(4, Math.floor(state.run.streak / 2));
@@ -718,21 +785,52 @@ function animateLivesLoss() {
   els.livesValue.classList.remove("lives-hit");
   void els.livesValue.offsetWidth;
   els.livesValue.classList.add("lives-hit");
+  pulseElement(els.livesChip, "fx-chip-shake");
 }
 
 function setFeedback(text, tone) {
   els.feedbackBadge.textContent = text;
   els.feedbackBadge.dataset.tone = tone;
+  pulseElement(els.feedbackBadge, "fx-badge-pop");
 }
 
 function updateTimer(ratio) {
   const bounded = Math.max(0, Math.min(1, ratio));
   els.timerFill.style.transform = `scaleX(${bounded})`;
   els.timerFill.classList.toggle("is-danger", bounded <= 0.25);
+  els.gameScreen.classList.toggle("is-urgent", bounded <= 0.25 && isRunActive());
 }
 
 function setStatus(text) {
   els.statusText.textContent = text;
+}
+
+function defaultHomeStatus() {
+  if (state.recognitionSupported) {
+    return "Press Start Challenge to begin.";
+  }
+  return "Speech recognition is unavailable. Open in Chrome or Edge.";
+}
+
+function getRoundMicRetryLimit() {
+  return Math.max(MIC_AUTO_RETRY_MIN, Math.ceil(state.settings.roundSeconds * 1.2));
+}
+
+function pulseElement(element, className) {
+  if (!element) {
+    return;
+  }
+  element.classList.remove(className);
+  void element.offsetWidth;
+  element.classList.add(className);
+}
+
+function flashGame(className) {
+  for (const flashClass of GAME_FLASH_CLASSES) {
+    els.gameScreen.classList.remove(flashClass);
+  }
+  void els.gameScreen.offsetWidth;
+  els.gameScreen.classList.add(className);
 }
 
 function isRunActive() {
@@ -741,6 +839,11 @@ function isRunActive() {
 
 async function startCamera() {
   stopCamera();
+
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    setStatus("Camera API is not available in this browser.");
+    return;
+  }
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -780,6 +883,37 @@ function toggleCameraFacing() {
     startCamera();
   }
 }
+
+function scheduleMicRetry(statusText) {
+  if (!isRunActive() || !state.run || state.run.roundLocked) {
+    return;
+  }
+  if (state.run.micRetriesLeft <= 0) {
+    if (statusText) {
+      setStatus(`${statusText} Keep going, time is running.`);
+    }
+    return;
+  }
+  if (state.run.micRetryId) {
+    return;
+  }
+
+  state.run.micRetriesLeft -= 1;
+  if (statusText) {
+    setStatus(`${statusText} Retrying mic...`);
+  }
+
+  state.run.micRetryId = window.setTimeout(() => {
+    if (!state.run) {
+      return;
+    }
+    state.run.micRetryId = null;
+    if (isRunActive() && !state.run.roundLocked && !state.listening) {
+      startListening();
+    }
+  }, MIC_AUTO_RETRY_DELAY_MS);
+}
+
 function setupRecognition() {
   if (!SpeechRecognitionCtor) {
     state.recognitionSupported = false;
@@ -801,6 +935,7 @@ function setupRecognition() {
 
   state.recognition.onstart = () => {
     state.listening = true;
+    state.stopListeningRequested = false;
     els.gameScreen.classList.add("is-listening");
   };
 
@@ -829,7 +964,8 @@ function setupRecognition() {
     }
 
     if (finalCandidates.length) {
-      evaluateAnswerCandidates(finalCandidates, "voice");
+      state.run.heardFinalInRound = true;
+      evaluateAnswerCandidates(finalCandidates);
     }
   };
 
@@ -839,7 +975,7 @@ function setupRecognition() {
     }
 
     if (event.error === "no-speech") {
-      setStatus("No speech detected. Say answer clearly.");
+      scheduleMicRetry("No speech detected.");
       return;
     }
 
@@ -849,11 +985,19 @@ function setupRecognition() {
     }
 
     setStatus(`Speech error: ${event.error}`);
+    scheduleMicRetry("Speech glitch.");
   };
 
   state.recognition.onend = () => {
     state.listening = false;
     els.gameScreen.classList.remove("is-listening");
+    if (state.stopListeningRequested) {
+      state.stopListeningRequested = false;
+      return;
+    }
+    if (isRunActive() && state.run && !state.run.roundLocked && !state.run.heardFinalInRound) {
+      scheduleMicRetry("Listening paused.");
+    }
   };
 }
 
@@ -863,23 +1007,31 @@ function startListening() {
   }
 
   try {
+    state.stopListeningRequested = false;
     state.recognition.lang = state.run.deck.answerSpeechLang;
     state.recognition.start();
   } catch {
-    setStatus("Mic busy. Retry in a second.");
+    scheduleMicRetry("Mic busy.");
   }
 }
 
 function stopListening() {
-  if (!state.recognitionSupported || !state.recognition || !state.listening) {
+  if (!state.recognitionSupported || !state.recognition) {
     return;
   }
 
+  if (!state.listening) {
+    state.stopListeningRequested = false;
+    return;
+  }
+
+  state.stopListeningRequested = true;
   try {
     state.recognition.stop();
   } catch {
     state.listening = false;
     els.gameScreen.classList.remove("is-listening");
+    state.stopListeningRequested = false;
   }
 }
 
@@ -908,6 +1060,7 @@ function isCorrectAnswer(candidate, answers) {
   }
 
   const normalizedAnswers = answers.map((answer) => normalizeText(answer));
+  const compactCandidate = compactText(candidate);
 
   for (const normalizedAnswer of normalizedAnswers) {
     if (!normalizedAnswer) {
@@ -916,8 +1069,13 @@ function isCorrectAnswer(candidate, answers) {
 
     const alignedCandidate = alignToAnswerScript(candidate, normalizedAnswer);
     const chunks = splitCandidate(alignedCandidate);
+    const compactAnswer = compactText(normalizedAnswer);
+    const compactAligned = compactText(alignedCandidate);
 
     if (alignedCandidate === normalizedAnswer || alignedCandidate.includes(normalizedAnswer)) {
+      return true;
+    }
+    if (compactAligned && compactAnswer && compactAligned === compactAnswer) {
       return true;
     }
 
@@ -928,6 +1086,9 @@ function isCorrectAnswer(candidate, answers) {
       if (chunk === normalizedAnswer) {
         return true;
       }
+      if (compactText(chunk) === compactAnswer) {
+        return true;
+      }
       if (levenshtein(chunk, normalizedAnswer) <= allowedDistance(normalizedAnswer.length)) {
         return true;
       }
@@ -936,9 +1097,19 @@ function isCorrectAnswer(candidate, answers) {
     if (levenshtein(alignedCandidate, normalizedAnswer) <= allowedDistance(normalizedAnswer.length + 1)) {
       return true;
     }
+    if (compactCandidate && compactAnswer) {
+      const compactDistance = levenshtein(compactCandidate, compactAnswer);
+      if (compactDistance <= allowedDistance(compactAnswer.length)) {
+        return true;
+      }
+    }
   }
 
   return false;
+}
+
+function compactText(text) {
+  return text.replace(/\s+/g, "");
 }
 
 function alignToAnswerScript(candidate, answer) {
@@ -1002,7 +1173,10 @@ function splitCandidate(candidate) {
 }
 
 function allowedDistance(length) {
-  if (length <= 3) {
+  if (length <= 2) {
+    return 0;
+  }
+  if (length <= 4) {
     return 1;
   }
   if (length <= 7) {
@@ -1058,6 +1232,33 @@ function shuffle(items) {
     [items[i], items[j]] = [items[j], items[i]];
   }
   return items;
+}
+
+function normalizeSettings(rawSettings = {}) {
+  const deckIds = new Set(DECKS.map((deck) => deck.id));
+  const deckId = deckIds.has(rawSettings.deckId) ? rawSettings.deckId : DEFAULT_DECK_ID;
+  const roundSeconds = ROUND_SECONDS_OPTIONS.includes(rawSettings.roundSeconds)
+    ? rawSettings.roundSeconds
+    : 6;
+  const wordCount = WORD_COUNT_OPTIONS.includes(rawSettings.wordCount) ? rawSettings.wordCount : 10;
+  return { deckId, roundSeconds, wordCount };
+}
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) {
+      return normalizeSettings();
+    }
+    const parsed = JSON.parse(raw);
+    return normalizeSettings(parsed);
+  } catch {
+    return normalizeSettings();
+  }
+}
+
+function persistSettings() {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalizeSettings(state.settings)));
 }
 
 function loadLeaderboard() {
@@ -1129,7 +1330,7 @@ function renderLeaderboard() {
 }
 
 function ensureAudioContext() {
-  if (!state.audioSupported || state.muted || !AudioContextCtor) {
+  if (!state.audioSupported || !AudioContextCtor) {
     return null;
   }
 
