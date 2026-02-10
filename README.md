@@ -7,15 +7,16 @@ Mobile-first vocabulary game for TikTok/Reels style recordings.
 - Full-screen camera gameplay with transparent HUD on top.
 - Voice-only answers (Web Speech API).
 - Voice command to skip word: say `skip`, `dalshe`, or `dalee`.
+- Optional face filter (camera overlay): one fun mode with `Big Eyes + Giant Mouth`, toggled on Home screen.
 - Local leaderboard (stored in `localStorage`).
 - Optional in-app run recording (tab capture) with `Save Video` on finish screen.
 - `Share Video` via native share sheet when browser/device supports file sharing.
 - Trend-focused challenge loop: target score, combo burst moments, urgency cues, strong finish CTA.
-- Mobile camera framing mitigation: auto fit mode for devices that look too zoomed in selfie mode.
+- Mobile camera framing mitigation: portrait-first camera constraints plus zoom-out when device supports it.
 
 ## Flow
 
-1. `Home`: description, challenge target, local leaderboard.
+1. `Home`: description, challenge target, filter toggle, local leaderboard.
 2. `Settings`: language direction, answer time, words per run.
 3. `Game`: camera background, tap-anywhere start, voice translation rounds.
 4. `Finish`: score/streak/accuracy + save/share actions.
@@ -50,6 +51,7 @@ npm run preview -- --host
 - Camera and microphone permissions are required.
 - Best support: Chrome / Edge on mobile.
 - If speech recognition is unsupported, start button is disabled.
+- Face filters use MediaPipe Face Landmarker loaded from CDN on demand, so network access is required on first filter use.
 
 ## Recording notes
 

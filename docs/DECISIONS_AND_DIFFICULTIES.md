@@ -37,6 +37,9 @@
    - Recording now starts in background while gameplay begins instantly.
 9. Voice loop responsiveness on mobile.
    - Reduced mic warmup delay and auto-retry delay to shorten dead time between user speech and capture restart.
+10. Added social-style camera filters without native app SDKs.
+   - Implemented on-device face tracking with MediaPipe Face Landmarker (lazy-loaded).
+   - Added lightweight canvas effect (`Big Eyes + Giant Mouth`) with throttled detection loop to keep mobile FPS acceptable.
 
 ## Trend heuristics used
 
