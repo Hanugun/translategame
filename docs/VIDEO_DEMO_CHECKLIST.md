@@ -8,8 +8,7 @@ Goal: record a vertical clip where gameplay and your face are visible at the sam
 2. Allow camera + microphone permissions.
 3. Keep phone in portrait orientation.
 4. Choose deck/time/word count in `Settings`.
-5. Optional: enable the fun face filter toggle on `Home` (`Big Eyes + Giant Mouth`).
-6. Return to `Home` and tap `Start Challenge`.
+5. Return to `Home` and tap `Start Challenge`.
 
 ## 2. Recording flow
 

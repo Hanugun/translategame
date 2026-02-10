@@ -24,16 +24,6 @@ const RECORDING_MIME_CANDIDATES = [
   "video/webm"
 ];
 const STREAK_MILESTONES = [3, 5, 8, 12];
-const FACE_FX_DETECT_INTERVAL_MS = 85;
-const FACE_FX_MAX_PIXELS = 1_050_000;
-const MEDIAPIPE_VISION_BUNDLE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/vision_bundle.mjs";
-const MEDIAPIPE_WASM_ROOT_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
-const MEDIAPIPE_FACE_MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
-const FACE_LEFT_EYE_INDICES = [33, 133, 159, 145, 160, 144, 158, 153];
-const FACE_RIGHT_EYE_INDICES = [362, 263, 386, 374, 385, 380, 387, 373];
-const FACE_MOUTH_INDICES = [61, 291, 0, 13, 14, 17, 78, 308, 81, 311, 84, 314];
-const FACE_NOSE_CENTER_INDEX = 1;
 
 const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
 const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
@@ -58,18 +48,6 @@ app.innerHTML = `
       <section class="home-actions">
         <button id="startFromHomeBtn" class="btn btn-start" type="button">Start Challenge</button>
         <button id="openSettingsBtn" class="btn btn-ghost" type="button">Settings</button>
-      </section>
-      <section class="home-filter-toggle">
-        <label class="filter-toggle-card" for="faceFilterToggle">
-          <span class="filter-toggle-copy">
-            <strong>Fun Face Filter</strong>
-            <small>Big eyes + giant mouth</small>
-          </span>
-          <span class="filter-toggle-switch">
-            <input id="faceFilterToggle" type="checkbox" />
-            <span class="filter-toggle-slider"></span>
-          </span>
-        </label>
       </section>
 
       <section class="leaderboard-panel">
@@ -116,7 +94,6 @@ app.innerHTML = `
       data-camera-fit="cover"
     >
       <video id="cameraVideo" class="camera-video" autoplay muted playsinline></video>
-      <canvas id="faceFxCanvas" class="face-fx-canvas hidden" aria-hidden="true"></canvas>
       <div class="camera-vignette" aria-hidden="true"></div>
 
       <div class="road-plane" aria-hidden="true"></div>
@@ -189,7 +166,6 @@ const els = {
 
   startFromHomeBtn: document.querySelector("#startFromHomeBtn"),
   openSettingsBtn: document.querySelector("#openSettingsBtn"),
-  faceFilterToggle: document.querySelector("#faceFilterToggle"),
   clearLeaderboardBtn: document.querySelector("#clearLeaderboardBtn"),
   leaderboardList: document.querySelector("#leaderboardList"),
   challengeLine: document.querySelector("#challengeLine"),
@@ -201,7 +177,6 @@ const els = {
   wordCountSelect: document.querySelector("#wordCountSelect"),
 
   cameraVideo: document.querySelector("#cameraVideo"),
-  faceFxCanvas: document.querySelector("#faceFxCanvas"),
 
   exitToHomeBtn: document.querySelector("#exitToHomeBtn"),
   switchCameraBtn: document.querySelector("#switchCameraBtn"),
@@ -273,30 +248,14 @@ const state = {
   recordingMixDestination: null,
   recordingMicStream: null,
   recordingMicSource: null,
-  isLikelyMobile: /android|iphone|ipad|ipod/i.test(navigator.userAgent || ""),
-  faceFx: {
-    loadingPromise: null,
-    landmarker: null,
-    rafId: null,
-    detectIntervalMs: FACE_FX_DETECT_INTERVAL_MS,
-    lastDetectAt: 0,
-    lastVideoTime: -1,
-    hasWarnedFailure: false,
-    frameCanvas: document.createElement("canvas"),
-    frameCtx: null,
-    layout: null
-  }
+  isLikelyMobile: /android|iphone|ipad|ipod/i.test(navigator.userAgent || "")
 };
-
-state.faceFx.frameCtx = state.faceFx.frameCanvas.getContext("2d", { alpha: true });
 
 init();
 
 function init() {
   buildDeckOptions();
   buildSettingSelects();
-  syncHomeFilterToggle();
-  applyFaceFilterMode();
   renderLeaderboard();
   updateChallengeCopy();
   setupRecognition();
@@ -360,12 +319,6 @@ function bindEvents() {
     persistSettings();
   });
 
-  els.faceFilterToggle.addEventListener("change", () => {
-    state.settings.faceFilterEnabled = Boolean(els.faceFilterToggle.checked);
-    persistSettings();
-    applyFaceFilterMode();
-  });
-
   els.readyOverlay.addEventListener("click", () => {
     if (!els.readyOverlay.classList.contains("hidden")) {
       startRunNow();
@@ -409,14 +362,9 @@ function bindEvents() {
   window.addEventListener("beforeunload", () => {
     stopRunRecording({ discard: true });
     teardownRun();
-    stopFaceFxRendering({ clear: true });
     stopCamera();
     stopCaptureStream();
     clearRunVideoArtifact();
-  });
-
-  window.addEventListener("resize", () => {
-    syncFaceFxCanvasSize();
   });
 }
 
@@ -446,13 +394,6 @@ function buildSettingSelects() {
     const selected = value === state.settings.wordCount ? "selected" : "";
     return `<option value="${value}" ${selected}>${value}</option>`;
   }).join("");
-}
-
-function syncHomeFilterToggle() {
-  if (!els.faceFilterToggle) {
-    return;
-  }
-  els.faceFilterToggle.checked = Boolean(state.settings.faceFilterEnabled);
 }
 
 function syncRunMetaToSettings() {
@@ -1193,9 +1134,7 @@ async function startCamera() {
       framingStatus = await applyBestCameraFraming(videoTrack);
     }
     setStatus(framingStatus);
-    await startFaceFxRendering();
   } catch {
-    stopFaceFxRendering({ clear: true });
     setStatus("Camera permission blocked. Game still works without camera.");
   }
 }
@@ -1222,8 +1161,6 @@ function getTargetCameraAspectRatio() {
 }
 
 function stopCamera() {
-  stopFaceFxRendering({ clear: true });
-
   if (!state.cameraStream) {
     return;
   }
@@ -1331,606 +1268,6 @@ function getTrackAspectRatio(videoTrack) {
   }
   const settings = videoTrack.getSettings();
   return settings.aspectRatio || (settings.width && settings.height ? settings.width / settings.height : 0);
-}
-
-function applyFaceFilterMode() {
-  const enabled = isFaceFilterEnabled();
-  els.faceFxCanvas.classList.toggle("hidden", !enabled);
-
-  if (!enabled) {
-    stopFaceFxRendering({ clear: true });
-    return;
-  }
-
-  if (state.cameraStream) {
-    void startFaceFxRendering();
-  }
-}
-
-function isFaceFilterEnabled() {
-  return Boolean(state.settings.faceFilterEnabled);
-}
-
-async function ensureFaceLandmarker() {
-  if (!isFaceFilterEnabled()) {
-    return false;
-  }
-  if (state.faceFx.landmarker) {
-    return true;
-  }
-  if (state.faceFx.loadingPromise) {
-    return state.faceFx.loadingPromise;
-  }
-
-  state.faceFx.loadingPromise = (async () => {
-    try {
-      setStatus("Loading face filter model...");
-      const visionBundle = await import(/* @vite-ignore */ MEDIAPIPE_VISION_BUNDLE_URL);
-      const { FaceLandmarker, FilesetResolver } = visionBundle;
-      const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_ROOT_URL);
-      state.faceFx.landmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: MEDIAPIPE_FACE_MODEL_URL },
-        runningMode: "VIDEO",
-        numFaces: 1,
-        minFaceDetectionConfidence: 0.52,
-        minFacePresenceConfidence: 0.52,
-        minTrackingConfidence: 0.5
-      });
-      state.faceFx.hasWarnedFailure = false;
-      return true;
-    } catch {
-      if (!state.faceFx.hasWarnedFailure) {
-        state.faceFx.hasWarnedFailure = true;
-        setStatus("Face filter failed to load. Continue without filter.");
-      }
-      state.settings.faceFilterEnabled = false;
-      syncHomeFilterToggle();
-      persistSettings();
-      applyFaceFilterMode();
-      return false;
-    } finally {
-      state.faceFx.loadingPromise = null;
-    }
-  })();
-
-  return state.faceFx.loadingPromise;
-}
-
-async function startFaceFxRendering() {
-  if (!state.cameraStream || !isFaceFilterEnabled()) {
-    return;
-  }
-  const ready = await ensureFaceLandmarker();
-  if (!ready || !state.cameraStream || !isFaceFilterEnabled()) {
-    return;
-  }
-  if (state.faceFx.rafId) {
-    return;
-  }
-
-  syncFaceFxCanvasSize();
-  state.faceFx.lastDetectAt = 0;
-  state.faceFx.lastVideoTime = -1;
-  state.faceFx.rafId = window.requestAnimationFrame(faceFxTick);
-}
-
-function stopFaceFxRendering({ clear = false } = {}) {
-  if (state.faceFx.rafId) {
-    window.cancelAnimationFrame(state.faceFx.rafId);
-    state.faceFx.rafId = null;
-  }
-  state.faceFx.lastVideoTime = -1;
-  state.faceFx.lastDetectAt = 0;
-  state.faceFx.layout = null;
-  state.faceFx.tracked = null;
-  if (clear) {
-    clearFaceFxCanvas();
-  }
-}
-
-function clearFaceFxCanvas() {
-  if (!els.faceFxCanvas) {
-    return;
-  }
-  const ctx = els.faceFxCanvas.getContext("2d");
-  if (!ctx) {
-    return;
-  }
-  ctx.clearRect(0, 0, els.faceFxCanvas.width || 0, els.faceFxCanvas.height || 0);
-}
-
-function syncFaceFxCanvasSize() {
-  if (!els.faceFxCanvas) {
-    return;
-  }
-
-  const rect = els.gameScreen.getBoundingClientRect();
-  if (!rect.width || !rect.height) {
-    return;
-  }
-
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-  let width = Math.max(2, Math.round(rect.width * dpr));
-  let height = Math.max(2, Math.round(rect.height * dpr));
-  const pixels = width * height;
-  if (pixels > FACE_FX_MAX_PIXELS) {
-    const downScale = Math.sqrt(FACE_FX_MAX_PIXELS / pixels);
-    width = Math.max(2, Math.round(width * downScale));
-    height = Math.max(2, Math.round(height * downScale));
-  }
-
-  if (els.faceFxCanvas.width !== width || els.faceFxCanvas.height !== height) {
-    els.faceFxCanvas.width = width;
-    els.faceFxCanvas.height = height;
-  }
-  if (state.faceFx.frameCanvas.width !== width || state.faceFx.frameCanvas.height !== height) {
-    state.faceFx.frameCanvas.width = width;
-    state.faceFx.frameCanvas.height = height;
-  }
-}
-
-function faceFxTick(now) {
-  if (!state.faceFx.landmarker || !state.cameraStream || !isFaceFilterEnabled()) {
-    stopFaceFxRendering({ clear: true });
-    return;
-  }
-
-  const video = els.cameraVideo;
-  if (!video || video.readyState < 2) {
-    state.faceFx.rafId = window.requestAnimationFrame(faceFxTick);
-    return;
-  }
-
-  if (now - state.faceFx.lastDetectAt < state.faceFx.detectIntervalMs) {
-    state.faceFx.rafId = window.requestAnimationFrame(faceFxTick);
-    return;
-  }
-  if (video.currentTime === state.faceFx.lastVideoTime) {
-    state.faceFx.rafId = window.requestAnimationFrame(faceFxTick);
-    return;
-  }
-
-  syncFaceFxCanvasSize();
-  const canvas = els.faceFxCanvas;
-  const ctx = canvas.getContext("2d");
-  const frameCtx = state.faceFx.frameCtx;
-  if (!ctx || !frameCtx || !canvas.width || !canvas.height) {
-    state.faceFx.rafId = window.requestAnimationFrame(faceFxTick);
-    return;
-  }
-
-  state.faceFx.lastDetectAt = now;
-  state.faceFx.lastVideoTime = video.currentTime;
-
-  const layout = computeCameraLayout(canvas.width, canvas.height, video.videoWidth, video.videoHeight);
-  state.faceFx.layout = layout;
-  drawCameraFrameToContext(frameCtx, state.faceFx.frameCanvas, video, layout);
-
-  let result = null;
-  try {
-    result = state.faceFx.landmarker.detectForVideo(video, now);
-  } catch {
-    if (!state.faceFx.hasWarnedFailure) {
-      state.faceFx.hasWarnedFailure = true;
-      setStatus("Face filter tracking error. Turn it off from Home if needed.");
-    }
-    state.faceFx.rafId = window.requestAnimationFrame(faceFxTick);
-    return;
-  }
-
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  const landmarks = result && Array.isArray(result.faceLandmarks) ? result.faceLandmarks[0] : null;
-  if (landmarks) {
-    renderFaceFilterFrame(ctx, landmarks);
-  }
-
-  state.faceFx.rafId = window.requestAnimationFrame(faceFxTick);
-}
-
-function computeCameraLayout(canvasWidth, canvasHeight, sourceWidth, sourceHeight) {
-  const safeSourceWidth = Math.max(2, sourceWidth || canvasWidth || 2);
-  const safeSourceHeight = Math.max(2, sourceHeight || canvasHeight || 2);
-  const useContain = state.cameraFitMode === "contain";
-  const scale = useContain
-    ? Math.min(canvasWidth / safeSourceWidth, canvasHeight / safeSourceHeight)
-    : Math.max(canvasWidth / safeSourceWidth, canvasHeight / safeSourceHeight);
-  const drawWidth = safeSourceWidth * scale;
-  const drawHeight = safeSourceHeight * scale;
-  const offsetX = (canvasWidth - drawWidth) * 0.5;
-  const offsetY = (canvasHeight - drawHeight) * 0.5;
-
-  return {
-    drawWidth,
-    drawHeight,
-    offsetX,
-    offsetY,
-    mirrored: els.gameScreen.dataset.facing !== "environment"
-  };
-}
-
-function drawCameraFrameToContext(ctx, canvas, video, layout) {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.save();
-  if (layout.mirrored) {
-    ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1);
-  }
-  ctx.drawImage(video, layout.offsetX, layout.offsetY, layout.drawWidth, layout.drawHeight);
-  ctx.restore();
-}
-
-function renderFaceFilterFrame(ctx, landmarks) {
-  if (!state.faceFx.layout) {
-    return;
-  }
-  drawMemeBigEyesBigMouthEffect(ctx, landmarks);
-}
-
-function drawMemeBigEyesBigMouthEffect(ctx, landmarks) {
-  const leftEye = getLandmarkBounds(landmarks, FACE_LEFT_EYE_INDICES);
-  const rightEye = getLandmarkBounds(landmarks, FACE_RIGHT_EYE_INDICES);
-  const mouth = getLandmarkBounds(landmarks, FACE_MOUTH_INDICES);
-  if (!leftEye || !rightEye || !mouth) {
-    return;
-  }
-
-  const mouthMetrics = computeMouthMetrics(landmarks, mouth);
-  const rawPlate = computeMemePlateBounds(leftEye, rightEye, mouth);
-  const plate = smoothTrackedBounds("plate", rawPlate, 0.34);
-  const nosePoint = mapLandmarkToCanvas(landmarks[FACE_NOSE_CENTER_INDEX]) || {
-    x: plate.cx,
-    y: plate.cy
-  };
-  const skinTone = sampleSkinToneFromFrame(nosePoint.x, nosePoint.y);
-  drawMemeFacePlate(ctx, plate, skinTone);
-
-  const eyeY = plate.y + plate.h * 0.305;
-  const eyeRx = plate.w * 0.266;
-  const eyeRy = plate.h * 0.172;
-  const leftEyeAngle = computeEyeAngle(landmarks, 33, 133);
-  const rightEyeAngle = computeEyeAngle(landmarks, 362, 263);
-  const leftRawTarget = {
-    cx: plate.cx - plate.w * 0.252,
-    cy: eyeY,
-    rx: eyeRx,
-    ry: eyeRy
-  };
-  const rightRawTarget = {
-    cx: plate.cx + plate.w * 0.252,
-    cy: eyeY,
-    rx: eyeRx,
-    ry: eyeRy
-  };
-  const leftTarget = smoothTrackedBounds("leftEye", leftRawTarget, 0.45);
-  const rightTarget = smoothTrackedBounds("rightEye", rightRawTarget, 0.45);
-
-  drawMemeEye(ctx, leftEye, leftTarget, leftEyeAngle);
-  drawMemeEye(ctx, rightEye, rightTarget, rightEyeAngle);
-
-  const mouthOpenRatio = clamp(mouthMetrics.height / Math.max(1, mouthMetrics.width), 0.08, 0.62);
-  const rawMouthTarget = {
-    cx: plate.cx + clamp(mouth.cx - plate.cx, -plate.w * 0.09, plate.w * 0.09),
-    cy: plate.y + plate.h * 0.705 + clamp(mouth.cy - (plate.y + plate.h * 0.705), -plate.h * 0.08, plate.h * 0.1),
-    rx: plate.w * 0.448,
-    ry: plate.h * (0.155 + mouthOpenRatio * 0.36)
-  };
-  const mouthTarget = smoothTrackedBounds("mouth", rawMouthTarget, 0.55);
-
-  drawMemeMouth(ctx, mouth, mouthTarget, mouthMetrics.angle);
-}
-
-function computeMemePlateBounds(leftEye, rightEye, mouth) {
-  const minX = Math.min(leftEye.cx - leftEye.rx * 1.8, rightEye.cx - rightEye.rx * 1.8, mouth.cx - mouth.rx * 1.5);
-  const maxX = Math.max(leftEye.cx + leftEye.rx * 1.8, rightEye.cx + rightEye.rx * 1.8, mouth.cx + mouth.rx * 1.5);
-  const minY = Math.min(leftEye.cy - leftEye.ry * 1.5, rightEye.cy - rightEye.ry * 1.5);
-  const maxY = mouth.cy + mouth.ry * 2.2;
-
-  const rawW = Math.max(90, maxX - minX);
-  const rawH = Math.max(120, maxY - minY);
-  const centerX = (minX + maxX) * 0.5;
-  const centerY = (minY + maxY) * 0.5;
-
-  const paddingX = rawW * 0.08;
-  const paddingY = rawH * 0.06;
-  const maxWidth = els.faceFxCanvas.width - 6;
-  const maxHeight = els.faceFxCanvas.height - 6;
-  const w = Math.min(rawW + paddingX * 2, maxWidth);
-  const h = Math.min(rawH + paddingY * 2, maxHeight);
-
-  let x = centerX - w * 0.5;
-  let y = centerY - h * 0.5;
-  x = clamp(x, 3, Math.max(3, els.faceFxCanvas.width - w - 3));
-  y = clamp(y, 3, Math.max(3, els.faceFxCanvas.height - h - 3));
-
-  return {
-    x,
-    y,
-    w,
-    h,
-    cx: x + w * 0.5,
-    cy: y + h * 0.5
-  };
-}
-
-function sampleSkinToneFromFrame(x, y) {
-  const ctx = state.faceFx.frameCtx;
-  const canvas = state.faceFx.frameCanvas;
-  if (!ctx || !canvas.width || !canvas.height) {
-    return { r: 214, g: 188, b: 170 };
-  }
-
-  const sampleRadius = 4;
-  const startX = clamp(Math.round(x - sampleRadius), 0, Math.max(0, canvas.width - 1));
-  const startY = clamp(Math.round(y - sampleRadius), 0, Math.max(0, canvas.height - 1));
-  const endX = clamp(Math.round(x + sampleRadius), 0, Math.max(0, canvas.width - 1));
-  const endY = clamp(Math.round(y + sampleRadius), 0, Math.max(0, canvas.height - 1));
-  const width = Math.max(1, endX - startX + 1);
-  const height = Math.max(1, endY - startY + 1);
-
-  try {
-    const data = ctx.getImageData(startX, startY, width, height).data;
-    let r = 0;
-    let g = 0;
-    let b = 0;
-    let count = 0;
-
-    for (let i = 0; i < data.length; i += 4) {
-      const alpha = data[i + 3];
-      if (alpha < 24) {
-        continue;
-      }
-      r += data[i];
-      g += data[i + 1];
-      b += data[i + 2];
-      count += 1;
-    }
-
-    if (!count) {
-      return { r: 214, g: 188, b: 170 };
-    }
-    return {
-      r: Math.round(r / count),
-      g: Math.round(g / count),
-      b: Math.round(b / count)
-    };
-  } catch {
-    return { r: 214, g: 188, b: 170 };
-  }
-}
-
-function drawMemeFacePlate(ctx, plate, skinTone) {
-  const radius = Math.min(plate.w, plate.h) * 0.035;
-  const sourceCanvas = state.faceFx.frameCanvas;
-  const sourceRect = clampRectToCanvas(sourceCanvas, plate.x - 5, plate.y - 5, plate.w + 10, plate.h + 10);
-
-  ctx.save();
-  drawRoundedRectPath(ctx, plate.x, plate.y, plate.w, plate.h, radius);
-  ctx.clip();
-
-  if (sourceRect) {
-    ctx.filter = "blur(15px)";
-    ctx.drawImage(
-      sourceCanvas,
-      sourceRect.x,
-      sourceRect.y,
-      sourceRect.w,
-      sourceRect.h,
-      plate.x,
-      plate.y,
-      plate.w,
-      plate.h
-    );
-    ctx.filter = "none";
-  }
-
-  ctx.fillStyle = `rgba(${skinTone.r}, ${skinTone.g}, ${skinTone.b}, 0.62)`;
-  ctx.fillRect(plate.x, plate.y, plate.w, plate.h);
-  ctx.restore();
-}
-
-function drawMemeEye(ctx, sourceBounds, target, angle = 0) {
-  drawFeatureCutout(ctx, sourceBounds, target, {
-    sourceScaleX: 2.06,
-    sourceScaleY: 1.95,
-    angle,
-    feather: 3.5
-  });
-}
-
-function drawMemeMouth(ctx, sourceBounds, target, angle = 0) {
-  drawFeatureCutout(ctx, sourceBounds, target, {
-    sourceScaleX: 1.92,
-    sourceScaleY: 1.58,
-    angle,
-    feather: 2.6
-  });
-}
-
-function drawFeatureCutout(ctx, sourceBounds, targetBounds, options = {}) {
-  const sourceCanvas = state.faceFx.frameCanvas;
-  const sourceScaleX = Number(options.sourceScaleX) || 1.4;
-  const sourceScaleY = Number(options.sourceScaleY) || 1.4;
-  const angle = Number(options.angle) || 0;
-  const feather = Math.max(0, Number(options.feather) || 0);
-
-  const srcX = sourceBounds.cx - sourceBounds.rx * sourceScaleX;
-  const srcY = sourceBounds.cy - sourceBounds.ry * sourceScaleY;
-  const srcW = Math.max(4, sourceBounds.rx * 2 * sourceScaleX);
-  const srcH = Math.max(4, sourceBounds.ry * 2 * sourceScaleY);
-  const safeSrc = clampRectToCanvas(sourceCanvas, srcX, srcY, srcW, srcH);
-
-  if (!safeSrc) {
-    return;
-  }
-
-  ctx.save();
-  ctx.translate(targetBounds.cx, targetBounds.cy);
-  ctx.rotate(angle);
-  ctx.beginPath();
-  ctx.ellipse(0, 0, targetBounds.rx, targetBounds.ry, 0, 0, Math.PI * 2);
-  ctx.clip();
-
-  if (feather > 0) {
-    ctx.filter = `blur(${feather}px)`;
-  }
-  ctx.drawImage(
-    sourceCanvas,
-    safeSrc.x,
-    safeSrc.y,
-    safeSrc.w,
-    safeSrc.h,
-    -targetBounds.rx,
-    -targetBounds.ry,
-    targetBounds.rx * 2,
-    targetBounds.ry * 2
-  );
-  ctx.filter = "none";
-  ctx.restore();
-}
-
-function computeMouthMetrics(landmarks, fallbackBounds) {
-  const leftCorner = mapLandmarkToCanvas(landmarks[61]);
-  const rightCorner = mapLandmarkToCanvas(landmarks[291]);
-  const topLip = mapLandmarkToCanvas(landmarks[13]);
-  const bottomLip = mapLandmarkToCanvas(landmarks[14]);
-
-  if (!leftCorner || !rightCorner || !topLip || !bottomLip) {
-    return {
-      width: fallbackBounds.rx * 2,
-      height: fallbackBounds.ry * 2,
-      angle: 0
-    };
-  }
-
-  return {
-    width: distanceBetween(leftCorner, rightCorner),
-    height: distanceBetween(topLip, bottomLip),
-    angle: Math.atan2(rightCorner.y - leftCorner.y, rightCorner.x - leftCorner.x)
-  };
-}
-
-function computeEyeAngle(landmarks, leftIndex, rightIndex) {
-  const leftPoint = mapLandmarkToCanvas(landmarks[leftIndex]);
-  const rightPoint = mapLandmarkToCanvas(landmarks[rightIndex]);
-  if (!leftPoint || !rightPoint) {
-    return 0;
-  }
-  return Math.atan2(rightPoint.y - leftPoint.y, rightPoint.x - leftPoint.x);
-}
-
-function smoothTrackedBounds(key, nextBounds, alpha = 0.45) {
-  if (!state.faceFx.tracked) {
-    state.faceFx.tracked = {};
-  }
-  const prev = state.faceFx.tracked[key];
-  if (!prev) {
-    const seeded = { ...nextBounds };
-    state.faceFx.tracked[key] = seeded;
-    return seeded;
-  }
-
-  const smoothed = {};
-  for (const prop of Object.keys(nextBounds)) {
-    const prevValue = Number(prev[prop]);
-    const nextValue = Number(nextBounds[prop]);
-    smoothed[prop] = Number.isFinite(prevValue) && Number.isFinite(nextValue)
-      ? lerpNumber(prevValue, nextValue, alpha)
-      : nextBounds[prop];
-  }
-
-  state.faceFx.tracked[key] = smoothed;
-  return smoothed;
-}
-
-function lerpNumber(a, b, t) {
-  return a + (b - a) * t;
-}
-
-function distanceBetween(a, b) {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-function clampRectToCanvas(canvas, x, y, width, height) {
-  if (!canvas || !canvas.width || !canvas.height) {
-    return null;
-  }
-  const x0 = clamp(Math.floor(x), 0, Math.max(0, canvas.width - 1));
-  const y0 = clamp(Math.floor(y), 0, Math.max(0, canvas.height - 1));
-  const x1 = clamp(Math.ceil(x + width), 1, canvas.width);
-  const y1 = clamp(Math.ceil(y + height), 1, canvas.height);
-  const w = x1 - x0;
-  const h = y1 - y0;
-  if (w < 2 || h < 2) {
-    return null;
-  }
-  return { x: x0, y: y0, w, h };
-}
-
-function drawRoundedRectPath(ctx, x, y, width, height, radius) {
-  const r = Math.min(radius, width * 0.5, height * 0.5);
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + width - r, y);
-  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
-  ctx.lineTo(x + width, y + height - r);
-  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
-  ctx.lineTo(x + r, y + height);
-  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}
-
-function getLandmarkBounds(landmarks, indices) {
-  const points = indices
-    .map((index) => mapLandmarkToCanvas(landmarks[index]))
-    .filter(Boolean);
-
-  if (!points.length) {
-    return null;
-  }
-
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minY = Infinity;
-  let maxY = -Infinity;
-
-  for (const point of points) {
-    minX = Math.min(minX, point.x);
-    maxX = Math.max(maxX, point.x);
-    minY = Math.min(minY, point.y);
-    maxY = Math.max(maxY, point.y);
-  }
-
-  const width = Math.max(10, maxX - minX);
-  const height = Math.max(8, maxY - minY);
-  return {
-    cx: minX + width * 0.5,
-    cy: minY + height * 0.5,
-    rx: width * 0.5,
-    ry: height * 0.5
-  };
-}
-
-function mapLandmarkToCanvas(landmark) {
-  if (!landmark || !state.faceFx.layout || !els.faceFxCanvas.width || !els.faceFxCanvas.height) {
-    return null;
-  }
-
-  const layout = state.faceFx.layout;
-  const normalizedX = clamp(layout.mirrored ? 1 - landmark.x : landmark.x, 0, 1);
-  const normalizedY = clamp(landmark.y, 0, 1);
-
-  return {
-    x: layout.offsetX + normalizedX * layout.drawWidth,
-    y: layout.offsetY + normalizedY * layout.drawHeight
-  };
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
 }
 
 function pickRecordingMimeType() {
@@ -2764,13 +2101,7 @@ function normalizeSettings(rawSettings = {}) {
     ? rawSettings.roundSeconds
     : 6;
   const wordCount = WORD_COUNT_OPTIONS.includes(rawSettings.wordCount) ? rawSettings.wordCount : 10;
-  const faceFilterEnabled =
-    typeof rawSettings.faceFilterEnabled === "boolean"
-      ? rawSettings.faceFilterEnabled
-      : typeof rawSettings.faceFilter === "string"
-        ? rawSettings.faceFilter !== "none"
-        : false;
-  return { deckId, roundSeconds, wordCount, faceFilterEnabled };
+  return { deckId, roundSeconds, wordCount };
 }
 
 function loadSettings() {
