@@ -14,6 +14,9 @@ const ROUND_TIMER_INTERVAL_MS = 66;
 const WARNING_TIMER_SECONDS = 2.2;
 const GAME_FLASH_CLASSES = ["fx-hit", "fx-miss", "fx-skip"];
 const SKIP_COMMANDS = ["skip", "дальше", "далее", "dalshe", "dalee"];
+const CAMERA_MIN_PORTRAIT_RATIO = 0.48;
+const CAMERA_MAX_PORTRAIT_RATIO = 0.72;
+const CAMERA_WIDE_THRESHOLD = 0.82;
 const RECORDING_CHUNK_MS = 250;
 const RECORDING_MIME_CANDIDATES = [
   "video/webm;codecs=vp9,opus",
@@ -1083,16 +1086,43 @@ async function startCamera() {
     return;
   }
 
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
+  const targetRatio = getTargetCameraAspectRatio();
+  const cameraAttempts = [
+    {
       video: {
-        facingMode: { ideal: state.cameraFacingMode },
-        aspectRatio: { ideal: 9 / 16 },
-        frameRate: { ideal: 30, max: 30 },
-        width: { ideal: 1280 }
+        facingMode: { exact: state.cameraFacingMode },
+        width: { ideal: 1080 },
+        height: { ideal: 1920 },
+        aspectRatio: { ideal: targetRatio },
+        resizeMode: "crop-and-scale",
+        frameRate: { ideal: 30, max: 30 }
       },
       audio: false
-    });
+    },
+    {
+      video: {
+        facingMode: { ideal: state.cameraFacingMode },
+        width: { ideal: 1080 },
+        height: { ideal: 1920 },
+        aspectRatio: { ideal: targetRatio },
+        resizeMode: "crop-and-scale",
+        frameRate: { ideal: 30, max: 30 }
+      },
+      audio: false
+    },
+    {
+      video: {
+        facingMode: { ideal: state.cameraFacingMode },
+        width: { ideal: 1280 },
+        aspectRatio: { ideal: targetRatio },
+        frameRate: { ideal: 30, max: 30 }
+      },
+      audio: false
+    }
+  ];
+
+  try {
+    const stream = await getFirstWorkingCameraStream(cameraAttempts);
 
     state.cameraStream = stream;
     els.cameraVideo.srcObject = stream;
@@ -1107,6 +1137,27 @@ async function startCamera() {
   } catch {
     setStatus("Camera permission blocked. Game still works without camera.");
   }
+}
+
+async function getFirstWorkingCameraStream(constraintsList) {
+  let lastError = null;
+  for (const constraints of constraintsList) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Camera init failed");
+}
+
+function getTargetCameraAspectRatio() {
+  if (!window.innerWidth || !window.innerHeight) {
+    return 9 / 16;
+  }
+
+  const ratio = window.innerWidth / window.innerHeight;
+  return Math.min(CAMERA_MAX_PORTRAIT_RATIO, Math.max(CAMERA_MIN_PORTRAIT_RATIO, ratio));
 }
 
 function stopCamera() {
@@ -1141,6 +1192,12 @@ function toggleCameraFacing() {
 }
 
 async function applyBestCameraFraming(videoTrack) {
+  const initialAspectRatio = getTrackAspectRatio(videoTrack);
+  let didForcePortrait = false;
+  if (initialAspectRatio > CAMERA_WIDE_THRESHOLD) {
+    didForcePortrait = await forcePortraitTrack(videoTrack);
+  }
+
   let didApplyZoomOut = false;
   if (typeof videoTrack.getCapabilities === "function") {
     const capabilities = videoTrack.getCapabilities();
@@ -1154,26 +1211,63 @@ async function applyBestCameraFraming(videoTrack) {
     }
   }
 
-  const settings = typeof videoTrack.getSettings === "function" ? videoTrack.getSettings() : {};
-  const aspectRatio =
-    settings.aspectRatio ||
-    (settings.width && settings.height ? settings.width / settings.height : 0);
-
-  // Some mobile selfie streams are effectively 4:3 and look too close in cover mode.
-  if (state.isLikelyMobile && aspectRatio > 0.62) {
-    state.cameraFitMode = "contain";
-  } else {
-    state.cameraFitMode = "cover";
-  }
+  state.cameraFitMode = "cover";
   els.gameScreen.dataset.cameraFit = state.cameraFitMode;
+  const aspectRatio = getTrackAspectRatio(videoTrack);
 
-  if (didApplyZoomOut) {
-    return "Camera ready (wide framing). Tap anywhere to start.";
+  if (didForcePortrait || didApplyZoomOut) {
+    return "Camera ready (portrait framing). Tap anywhere to start.";
   }
-  if (state.cameraFitMode === "contain") {
-    return "Camera ready (fit mode). Tap anywhere to start.";
+  if (state.isLikelyMobile && aspectRatio > CAMERA_WIDE_THRESHOLD) {
+    return "Camera ready. Your device returns wide selfie stream, using best full-screen crop.";
   }
   return "Camera ready. Tap anywhere to start.";
+}
+
+async function forcePortraitTrack(videoTrack) {
+  if (!videoTrack || typeof videoTrack.applyConstraints !== "function") {
+    return false;
+  }
+
+  const targetRatio = getTargetCameraAspectRatio();
+  const attempts = [
+    {
+      width: { ideal: 1080 },
+      height: { ideal: 1920 },
+      aspectRatio: { ideal: targetRatio },
+      resizeMode: "crop-and-scale"
+    },
+    {
+      width: { ideal: 720 },
+      height: { ideal: 1280 },
+      aspectRatio: { ideal: targetRatio }
+    },
+    {
+      aspectRatio: { ideal: targetRatio }
+    }
+  ];
+
+  for (const constraints of attempts) {
+    try {
+      await videoTrack.applyConstraints(constraints);
+      const ratio = getTrackAspectRatio(videoTrack);
+      if (!ratio || ratio <= CAMERA_WIDE_THRESHOLD) {
+        return true;
+      }
+    } catch {
+      // Keep trying softer constraint sets.
+    }
+  }
+
+  return false;
+}
+
+function getTrackAspectRatio(videoTrack) {
+  if (!videoTrack || typeof videoTrack.getSettings !== "function") {
+    return 0;
+  }
+  const settings = videoTrack.getSettings();
+  return settings.aspectRatio || (settings.width && settings.height ? settings.width / settings.height : 0);
 }
 
 function pickRecordingMimeType() {
