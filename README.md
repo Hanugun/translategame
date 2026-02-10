@@ -6,15 +6,19 @@ Mobile-first vocabulary game for TikTok/Reels style recordings.
 
 - Full-screen camera gameplay with transparent HUD on top.
 - Voice-only answers (Web Speech API).
-- Voice command to skip word: say `skip`, `dalshe` (`дальше`), or `dalee` (`далее`).
+- Voice command to skip word: say `skip`, `dalshe`, or `dalee`.
 - Local leaderboard (stored in `localStorage`).
 - Optional in-app run recording (tab capture) with `Save Video` on finish screen.
 - `Share Video` via native share sheet when browser/device supports file sharing.
-- 3-screen flow:
-1. `Home` (description + leaderboard + start + settings)
-2. `Settings` (language, answer time, words per run)
-3. `Game` (tap anywhere to start, then live run)
-- Finish overlay with score, best streak, accuracy.
+- Trend-focused challenge loop: target score, combo burst moments, urgency cues, strong finish CTA.
+- Mobile camera framing mitigation: auto fit mode for devices that look too zoomed in selfie mode.
+
+## Flow
+
+1. `Home`: description, challenge target, local leaderboard.
+2. `Settings`: language direction, answer time, words per run.
+3. `Game`: camera background, tap-anywhere start, voice translation rounds.
+4. `Finish`: score/streak/accuracy + save/share actions.
 
 ## Tech stack
 
@@ -43,7 +47,7 @@ npm run preview -- --host
 
 ## Browser requirements
 
-- Camera and microphone need permission.
+- Camera and microphone permissions are required.
 - Best support: Chrome / Edge on mobile.
 - If speech recognition is unsupported, start button is disabled.
 
@@ -51,18 +55,26 @@ npm run preview -- --host
 
 - In-app recording asks for screen/tab capture on run start.
 - Choose the current tab to capture gameplay + overlays.
-- Recording now uses an internal audio mix track (game SFX + best-effort mic), so clips still have sound when tab-audio is unavailable.
-- Direct posting to TikTok/Instagram from browser is not guaranteed; standard flow is:
+- Recording uses an internal audio mix track (game SFX + best-effort mic), so clips can still include sound when tab audio is unavailable.
+- Direct posting to TikTok/Instagram from browser is not guaranteed; reliable flow is:
   `Save Video` -> upload in TikTok/Instagram app.
+
+## Trend intent
+
+- Fast hook in first seconds (`Challenge: beat X pts`).
+- Mid-run pattern changes (combo bursts, timer pressure, fail/recovery moments).
+- End-screen CTA optimized for replay/share challenge behavior.
 
 ## Project structure
 
 - `index.html` - app shell
-- `src/main.js` - screens, run loop, speech/camera, scoring, leaderboard
-- `src/style.css` - all visuals, mobile layout, animations
+- `src/main.js` - screens, game loop, speech/camera logic, recording, scoring, leaderboard
+- `src/style.css` - visuals, mobile layout, motion system
 - `src/wordDeck.js` - language decks and words
-- `docs/VIDEO_DEMO_CHECKLIST.md` - how to record promo demo
+- `docs/VIDEO_DEMO_CHECKLIST.md` - recording checklist
 - `docs/DECISIONS_AND_DIFFICULTIES.md` - engineering decisions and tradeoffs
+- `docs/TREND_RESEARCH.md` - trend references and applied heuristics
+- `docs/DEPLOY_RENDER.md` - Render static-site deployment settings
 
 ## Tuning
 

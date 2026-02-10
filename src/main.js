@@ -6,16 +6,21 @@ const SETTINGS_KEY = "word-rush-settings-v1";
 const MAX_LEADERBOARD_ITEMS = 20;
 const WORD_COUNT_OPTIONS = [5, 10, 15, 20];
 const ROUND_SECONDS_OPTIONS = [4, 6, 8, 10];
-const ROUND_MIC_START_DELAY_MS = 170;
-const MIC_AUTO_RETRY_DELAY_MS = 230;
+const DEFAULT_LIVES = 3;
+const ROUND_MIC_START_DELAY_MS = 90;
+const MIC_AUTO_RETRY_DELAY_MS = 140;
 const MIC_AUTO_RETRY_MIN = 4;
+const ROUND_TIMER_INTERVAL_MS = 66;
+const WARNING_TIMER_SECONDS = 2.2;
 const GAME_FLASH_CLASSES = ["fx-hit", "fx-miss", "fx-skip"];
+const SKIP_COMMANDS = ["skip", "дальше", "далее", "dalshe", "dalee"];
 const RECORDING_CHUNK_MS = 250;
 const RECORDING_MIME_CANDIDATES = [
   "video/webm;codecs=vp9,opus",
   "video/webm;codecs=vp8,opus",
   "video/webm"
 ];
+const STREAK_MILESTONES = [3, 5, 8, 12];
 
 const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
 const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
@@ -34,6 +39,7 @@ app.innerHTML = `
         <p class="subtitle">
           Translate words out loud, build streak, record your reaction. Say "skip" or "дальше" to skip a word.
         </p>
+        <p id="challengeLine" class="challenge-line">Today's challenge: beat the top score.</p>
       </header>
 
       <section class="home-actions">
@@ -77,7 +83,13 @@ app.innerHTML = `
       </section>
     </section>
 
-    <section id="gameScreen" class="screen screen-game hidden" data-speed="0" data-facing="user">
+    <section
+      id="gameScreen"
+      class="screen screen-game hidden"
+      data-speed="0"
+      data-facing="user"
+      data-camera-fit="cover"
+    >
       <video id="cameraVideo" class="camera-video" autoplay muted playsinline></video>
       <div class="camera-vignette" aria-hidden="true"></div>
 
@@ -98,6 +110,7 @@ app.innerHTML = `
         </section>
 
         <section class="prompt-stack">
+          <p id="comboBurst" class="combo-burst hidden" aria-live="polite"></p>
           <p id="promptWord" class="prompt-word">tap to start</p>
           <p id="promptMeta" class="prompt-meta">🇺🇸 English -> 🇷🇺 Russian</p>
           <p class="heard-line">You said: <span id="heardText">-</span></p>
@@ -116,6 +129,7 @@ app.innerHTML = `
 
       <section id="readyOverlay" class="overlay ready-overlay" tabindex="0" aria-label="Tap to start">
         <div class="overlay-copy">
+          <small id="readyHook">Beat the top score.</small>
           <p>Tap anywhere to start</p>
           <small id="readyDetails">Your run starts immediately.</small>
         </div>
@@ -134,6 +148,7 @@ app.innerHTML = `
             <button id="saveVideoBtn" type="button" class="btn btn-ghost-small" disabled>Save Video</button>
             <button id="shareVideoBtn" type="button" class="btn btn-ghost-small" disabled>Share Video</button>
           </div>
+          <p id="finishCta" class="finish-cta">Post this run and challenge a friend to beat your score.</p>
           <p id="videoActionHint" class="video-action-hint">No run video yet.</p>
         </div>
       </section>
@@ -150,6 +165,7 @@ const els = {
   openSettingsBtn: document.querySelector("#openSettingsBtn"),
   clearLeaderboardBtn: document.querySelector("#clearLeaderboardBtn"),
   leaderboardList: document.querySelector("#leaderboardList"),
+  challengeLine: document.querySelector("#challengeLine"),
 
   settingsBackBtn: document.querySelector("#settingsBackBtn"),
   settingsDoneBtn: document.querySelector("#settingsDoneBtn"),
@@ -178,15 +194,18 @@ const els = {
   answerLine: document.querySelector("#answerLine"),
   correctAnswer: document.querySelector("#correctAnswer"),
   feedbackBadge: document.querySelector("#feedbackBadge"),
+  comboBurst: document.querySelector("#comboBurst"),
 
   timerFill: document.querySelector("#timerFill"),
   statusText: document.querySelector("#statusText"),
 
   readyOverlay: document.querySelector("#readyOverlay"),
+  readyHook: document.querySelector("#readyHook"),
   readyDetails: document.querySelector("#readyDetails"),
   finishOverlay: document.querySelector("#finishOverlay"),
   finishTitle: document.querySelector("#finishTitle"),
   finishStats: document.querySelector("#finishStats"),
+  finishCta: document.querySelector("#finishCta"),
   tryAgainBtn: document.querySelector("#tryAgainBtn"),
   finishExitBtn: document.querySelector("#finishExitBtn"),
   saveVideoBtn: document.querySelector("#saveVideoBtn"),
@@ -198,8 +217,10 @@ const state = {
   settings: loadSettings(),
   run: null,
   leaderboard: loadLeaderboard(),
+  challengeTargetScore: 1200,
   cameraStream: null,
   cameraFacingMode: "user",
+  cameraFitMode: "cover",
   recognition: null,
   recognitionSupported: false,
   listening: false,
@@ -223,7 +244,8 @@ const state = {
   pendingDiscardRecording: false,
   recordingMixDestination: null,
   recordingMicStream: null,
-  recordingMicSource: null
+  recordingMicSource: null,
+  isLikelyMobile: /android|iphone|ipad|ipod/i.test(navigator.userAgent || "")
 };
 
 init();
@@ -232,6 +254,7 @@ function init() {
   buildDeckOptions();
   buildSettingSelects();
   renderLeaderboard();
+  updateChallengeCopy();
   setupRecognition();
   applyVoiceSupportState();
   updateFinishVideoActions();
@@ -406,16 +429,29 @@ function prepareRun() {
   updateFinishVideoActions();
 
   const deck = getDeckById(state.settings.deckId);
-  const words = pickWords(deck.items, state.settings.wordCount);
+  const words = pickWords(deck.items, state.settings.wordCount).map((item) => {
+    const preparedAnswers = prepareAnswerVariants(item.answers);
+    const minAnswerLength = preparedAnswers.length
+      ? Math.min(...preparedAnswers.map((answer) => answer.compact.length))
+      : 1;
+    return {
+      ...item,
+      preparedAnswers,
+      minAnswerLength
+    };
+  });
+  const challengeTargetScore = calculateChallengeTarget();
+  state.challengeTargetScore = challengeTargetScore;
 
   state.run = {
     deck,
     words,
+    challengeTargetScore,
     index: 0,
     score: 0,
     streak: 0,
     bestStreak: 0,
-    lives: 3,
+    lives: DEFAULT_LIVES,
     totalAnswered: 0,
     totalCorrect: 0,
     timeLeft: state.settings.roundSeconds,
@@ -431,10 +467,12 @@ function prepareRun() {
     roundLocked: true,
     active: false,
     finished: false,
-    lastLivesVisual: 3,
+    lastLivesVisual: DEFAULT_LIVES,
     lastScoreVisual: 0,
     lastStreakVisual: 0,
-    lastWordsVisual: words.length
+    lastWordsVisual: words.length,
+    lastTickSecond: Math.ceil(state.settings.roundSeconds),
+    comboBurstId: null
   };
 
   els.finishOverlay.classList.add("hidden");
@@ -450,6 +488,7 @@ function prepareRun() {
   updateTimer(1);
   updateHud();
   setStatus("Tap anywhere to start.");
+  setComboBurst("", "neutral", true);
   els.gameScreen.classList.remove("is-urgent", ...GAME_FLASH_CLASSES);
 }
 
@@ -463,10 +502,14 @@ function showReadyOverlay() {
     `${deck.from.flag} ${deck.promptLangLabel} -> ${deck.to.flag} ${deck.answerLangLabel}`,
     `${state.settings.wordCount} words`,
     `${state.settings.roundSeconds}s per word`,
+    `target ${state.challengeTargetScore} pts`,
     `say "skip" or "дальше" to skip`,
     `allow screen capture if you want save/share video`
   ];
 
+  if (els.readyHook) {
+    els.readyHook.textContent = `Challenge: beat ${state.challengeTargetScore} pts`;
+  }
   els.readyDetails.textContent = details.join(" | ");
   els.readyOverlay.classList.remove("hidden");
   els.readyOverlay.focus();
@@ -484,9 +527,15 @@ async function startRunNow() {
   els.finishOverlay.classList.add("hidden");
 
   ensureAudioContext();
-  await startRunRecording();
   state.run.active = true;
   state.run.finished = false;
+  void startRunRecording().catch(() => {
+    if (isRunActive()) {
+      setStatus("Run started. Browser recording unavailable.");
+    }
+  });
+  playRunStartSound();
+  vibrate([10, 30, 10]);
 
   startNextRound();
 }
@@ -507,12 +556,14 @@ function startNextRound() {
   state.run.roundStartedAt = performance.now();
   state.run.heardFinalInRound = false;
   state.run.micRetriesLeft = getRoundMicRetryLimit();
+  state.run.lastTickSecond = Math.ceil(state.settings.roundSeconds);
 
   els.promptWord.textContent = state.run.currentWord.prompt;
   els.correctAnswer.textContent = state.run.currentWord.answers.join(", ");
   els.answerLine.classList.add("hidden");
   els.heardText.textContent = "-";
   setFeedback("GO", "neutral");
+  setComboBurst("", "neutral", true);
   setStatus("Say translation now.");
   updateHud();
   updateTimer(1);
@@ -530,11 +581,12 @@ function startNextRound() {
     const left = Math.max(0, state.settings.roundSeconds - elapsed);
     state.run.timeLeft = left;
     updateTimer(left / state.settings.roundSeconds);
+    handleRoundTimerCue(left);
 
     if (left <= 0) {
       resolveRound(false, "TIME", "Time is up");
     }
-  }, 50);
+  }, ROUND_TIMER_INTERVAL_MS);
 
   if (state.recognitionSupported) {
     if (state.run.autoMicId) {
@@ -551,7 +603,7 @@ function startNextRound() {
   }
 }
 
-function evaluateAnswerCandidates(rawCandidates) {
+function evaluateAnswerCandidates(rawCandidates, { allowMiss = true } = {}) {
   if (!isRunActive() || !state.run || state.run.roundLocked || !state.run.currentWord) {
     return;
   }
@@ -568,6 +620,15 @@ function evaluateAnswerCandidates(rawCandidates) {
   const normalizedCandidates = candidates.map((candidate) => normalizeText(candidate));
   els.heardText.textContent = candidates[0];
 
+  if (!allowMiss && state.run.currentWord.minAnswerLength) {
+    const hasEnoughChars = normalizedCandidates.some(
+      (candidate) => compactText(candidate).length >= Math.max(2, state.run.currentWord.minAnswerLength - 1)
+    );
+    if (!hasEnoughChars) {
+      return;
+    }
+  }
+
   const hasSkipCommand = normalizedCandidates.some((candidate) => isSkipCommand(candidate));
   if (hasSkipCommand) {
     resolveSkipRound();
@@ -575,12 +636,12 @@ function evaluateAnswerCandidates(rawCandidates) {
   }
 
   const isCorrect = normalizedCandidates.some((candidate) =>
-    isCorrectAnswer(candidate, state.run.currentWord.answers)
+    isCorrectAnswer(candidate, state.run.currentWord.preparedAnswers || [])
   );
 
   if (isCorrect) {
     resolveRound(true, "PERFECT", "Correct");
-  } else {
+  } else if (allowMiss) {
     resolveRound(false, "MISS", "Miss");
   }
 }
@@ -599,6 +660,8 @@ function resolveSkipRound() {
   setFeedback("SKIP", "neutral");
   setStatus("Skipped by voice command.");
   els.answerLine.classList.remove("hidden");
+  playSkipSound();
+  setComboBurst("SKIP", "neutral");
   pulseElement(els.wordChip, "fx-chip-pop");
   pulseElement(els.streakChip, "fx-chip-soft");
   flashGame("fx-skip");
@@ -606,19 +669,7 @@ function resolveSkipRound() {
   scheduleFeedbackReset();
 
   state.run.index += 1;
-  if (state.run.nextRoundId) {
-    window.clearTimeout(state.run.nextRoundId);
-  }
-  state.run.nextRoundId = window.setTimeout(() => {
-    if (!state.run || state.run.finished) {
-      return;
-    }
-    if (state.run.index >= state.run.words.length) {
-      finishRun(true);
-      return;
-    }
-    startNextRound();
-  }, 700);
+  queueNextRound(700);
 }
 
 function resolveRound(isCorrect, badgeText, statusText) {
@@ -646,9 +697,21 @@ function resolveRound(isCorrect, badgeText, statusText) {
     setStatus(`${statusText} | +${gain} points`);
     playSuccessSound();
     vibrate([12]);
+    playStreakSound(state.run.streak);
+    if (state.run.streak >= 2) {
+      setComboBurst(`x${state.run.streak} COMBO`, "hot");
+    } else {
+      setComboBurst("+100", "success");
+    }
     pulseElement(els.scoreChip, "fx-chip-pop");
     pulseElement(els.streakChip, "fx-chip-hot");
     flashGame("fx-hit");
+
+    if (STREAK_MILESTONES.includes(state.run.streak)) {
+      setStatus(`Streak x${state.run.streak}! Keep pushing.`);
+      playMilestoneSound(state.run.streak);
+      vibrate([16, 20, 16]);
+    }
   } else {
     state.run.streak = 0;
     state.run.lives -= 1;
@@ -657,6 +720,7 @@ function resolveRound(isCorrect, badgeText, statusText) {
     setStatus(statusText);
     els.answerLine.classList.remove("hidden");
     playFailSound();
+    setComboBurst("MISS", "fail");
     vibrate([35, 25, 35]);
     pulseElement(els.livesChip, "fx-chip-shake");
     pulseElement(els.streakChip, "fx-chip-soft");
@@ -667,19 +731,7 @@ function resolveRound(isCorrect, badgeText, statusText) {
   scheduleFeedbackReset();
 
   state.run.index += 1;
-  if (state.run.nextRoundId) {
-    window.clearTimeout(state.run.nextRoundId);
-  }
-  state.run.nextRoundId = window.setTimeout(() => {
-    if (!state.run || state.run.finished) {
-      return;
-    }
-    if (state.run.lives <= 0) {
-      finishRun(false);
-      return;
-    }
-    startNextRound();
-  }, 900);
+  queueNextRound(900);
 }
 
 function finishRun(deckCompleted) {
@@ -696,9 +748,17 @@ function finishRun(deckCompleted) {
   const accuracy = state.run.totalAnswered
     ? Math.round((state.run.totalCorrect / state.run.totalAnswered) * 100)
     : 0;
+  const beatChallenge = state.run.score >= state.run.challengeTargetScore;
 
-  els.finishTitle.textContent = deckCompleted ? "Deck Cleared" : "Run Over";
-  els.finishStats.textContent = `Score: ${state.run.score} | Best streak: ${state.run.bestStreak} | Accuracy: ${accuracy}%`;
+  els.finishTitle.textContent = beatChallenge ? "Challenge Beaten" : deckCompleted ? "Deck Cleared" : "Run Over";
+  els.finishStats.textContent =
+    `Score: ${state.run.score} / Target: ${state.run.challengeTargetScore}` +
+    ` | Best streak: ${state.run.bestStreak} | Accuracy: ${accuracy}%`;
+  if (els.finishCta) {
+    els.finishCta.textContent = beatChallenge
+      ? "Challenge cleared. Post this run and tag a friend to beat it."
+      : "Post your run and challenge a friend to beat your score.";
+  }
   els.finishOverlay.classList.remove("hidden");
   updateFinishVideoActions();
 
@@ -712,6 +772,10 @@ function finishRun(deckCompleted) {
     createdAt: Date.now()
   });
 
+  if (beatChallenge) {
+    playMilestoneSound(state.run.bestStreak + 4);
+    vibrate([24, 35, 24]);
+  }
   setStatus(deckCompleted ? "Great run. Try again or exit." : "Out of lives.");
 }
 
@@ -733,7 +797,9 @@ function teardownRun() {
   els.finishOverlay.classList.add("hidden");
   els.readyOverlay.classList.add("hidden");
   els.gameScreen.dataset.speed = "0";
+  els.gameScreen.dataset.cameraFit = "cover";
   els.gameScreen.classList.remove("is-urgent");
+  setComboBurst("", "neutral", true);
 }
 
 function teardownRoundTimers() {
@@ -755,6 +821,10 @@ function teardownRoundTimers() {
     window.clearTimeout(state.run.autoMicId);
     state.run.autoMicId = null;
   }
+  if (state.run.comboBurstId) {
+    window.clearTimeout(state.run.comboBurstId);
+    state.run.comboBurstId = null;
+  }
   clearMicRetryTimer();
 }
 
@@ -772,6 +842,31 @@ function clearMicRetryTimer() {
   }
   window.clearTimeout(state.run.micRetryId);
   state.run.micRetryId = null;
+}
+
+function queueNextRound(delayMs) {
+  if (!state.run) {
+    return;
+  }
+
+  if (state.run.nextRoundId) {
+    window.clearTimeout(state.run.nextRoundId);
+  }
+
+  state.run.nextRoundId = window.setTimeout(() => {
+    if (!state.run || state.run.finished) {
+      return;
+    }
+    if (state.run.lives <= 0) {
+      finishRun(false);
+      return;
+    }
+    if (state.run.index >= state.run.words.length) {
+      finishRun(true);
+      return;
+    }
+    startNextRound();
+  }, delayMs);
 }
 
 function scheduleFeedbackReset() {
@@ -796,7 +891,7 @@ function updateHud() {
   if (!state.run) {
     els.scoreValue.textContent = "0";
     els.streakValue.textContent = "0";
-    els.livesValue.innerHTML = renderLives(3);
+    els.livesValue.innerHTML = renderLives(DEFAULT_LIVES);
     els.wordProgressValue.textContent = "0";
     els.gameScreen.dataset.speed = "0";
     return;
@@ -831,7 +926,7 @@ function updateHud() {
 }
 
 function renderLives(count) {
-  const maxLives = 3;
+  const maxLives = DEFAULT_LIVES;
   return Array.from({ length: maxLives }, (_, index) => {
     const on = index < count;
     return `<span class="heart ${on ? "heart-on" : "heart-off"}">❤</span>`;
@@ -867,6 +962,92 @@ function defaultHomeStatus() {
     return "Press Start Challenge to begin.";
   }
   return "Speech recognition is unavailable. Open in Chrome or Edge.";
+}
+
+function getTopScore() {
+  if (!state.leaderboard.length) {
+    return 0;
+  }
+  return Math.max(0, Number(state.leaderboard[0].score) || 0);
+}
+
+function calculateChallengeTarget() {
+  const topScore = getTopScore();
+  if (!topScore) {
+    return 1200;
+  }
+  const boosted = Math.round(topScore * 1.08);
+  return Math.max(1200, Math.ceil(boosted / 10) * 10);
+}
+
+function updateChallengeCopy() {
+  state.challengeTargetScore = calculateChallengeTarget();
+  if (els.challengeLine) {
+    const topScore = getTopScore();
+    els.challengeLine.textContent = topScore
+      ? `Today's challenge: beat ${state.challengeTargetScore} pts (top is ${topScore}).`
+      : `Today's challenge: hit ${state.challengeTargetScore} pts.`;
+  }
+  if (els.readyHook) {
+    els.readyHook.textContent = `Challenge: beat ${state.challengeTargetScore} pts`;
+  }
+}
+
+function handleRoundTimerCue(timeLeft) {
+  if (!state.run || state.run.roundLocked) {
+    return;
+  }
+
+  if (timeLeft > WARNING_TIMER_SECONDS) {
+    state.run.lastTickSecond = Math.ceil(timeLeft);
+    return;
+  }
+
+  const wholeLeft = Math.ceil(timeLeft);
+  if (wholeLeft < state.run.lastTickSecond) {
+    state.run.lastTickSecond = wholeLeft;
+    playWarningTickSound(wholeLeft);
+    if (wholeLeft <= 2) {
+      vibrate([8]);
+    }
+  }
+}
+
+function setComboBurst(text, tone = "neutral", hidden = false) {
+  if (!els.comboBurst) {
+    return;
+  }
+
+  if (!state.run) {
+    els.comboBurst.textContent = "";
+    els.comboBurst.classList.add("hidden");
+    return;
+  }
+
+  if (state.run.comboBurstId) {
+    window.clearTimeout(state.run.comboBurstId);
+    state.run.comboBurstId = null;
+  }
+
+  if (hidden || !text) {
+    els.comboBurst.textContent = "";
+    els.comboBurst.classList.add("hidden");
+    els.comboBurst.dataset.tone = "neutral";
+    return;
+  }
+
+  els.comboBurst.textContent = text;
+  els.comboBurst.dataset.tone = tone;
+  els.comboBurst.classList.remove("hidden");
+  pulseElement(els.comboBurst, "combo-burst-pop");
+
+  state.run.comboBurstId = window.setTimeout(() => {
+    if (!state.run) {
+      return;
+    }
+    els.comboBurst.classList.add("hidden");
+    state.run.comboBurstId = null;
+  }, 740);
 }
 
 function getRoundMicRetryLimit() {
@@ -906,8 +1087,9 @@ async function startCamera() {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: state.cameraFacingMode },
-        width: { ideal: 1080 },
-        height: { ideal: 1920 }
+        aspectRatio: { ideal: 9 / 16 },
+        frameRate: { ideal: 30, max: 30 },
+        width: { ideal: 1280 }
       },
       audio: false
     });
@@ -915,7 +1097,13 @@ async function startCamera() {
     state.cameraStream = stream;
     els.cameraVideo.srcObject = stream;
     els.gameScreen.dataset.facing = state.cameraFacingMode;
-    setStatus("Camera ready. Tap anywhere to start.");
+    els.gameScreen.dataset.cameraFit = "cover";
+    let framingStatus = "Camera ready. Tap anywhere to start.";
+    const [videoTrack] = stream.getVideoTracks();
+    if (videoTrack) {
+      framingStatus = await applyBestCameraFraming(videoTrack);
+    }
+    setStatus(framingStatus);
   } catch {
     setStatus("Camera permission blocked. Game still works without camera.");
   }
@@ -950,6 +1138,42 @@ function toggleCameraFacing() {
   if (!els.gameScreen.classList.contains("hidden")) {
     startCamera();
   }
+}
+
+async function applyBestCameraFraming(videoTrack) {
+  let didApplyZoomOut = false;
+  if (typeof videoTrack.getCapabilities === "function") {
+    const capabilities = videoTrack.getCapabilities();
+    if (capabilities && capabilities.zoom && typeof capabilities.zoom.min === "number") {
+      try {
+        await videoTrack.applyConstraints({ advanced: [{ zoom: capabilities.zoom.min }] });
+        didApplyZoomOut = true;
+      } catch {
+        didApplyZoomOut = false;
+      }
+    }
+  }
+
+  const settings = typeof videoTrack.getSettings === "function" ? videoTrack.getSettings() : {};
+  const aspectRatio =
+    settings.aspectRatio ||
+    (settings.width && settings.height ? settings.width / settings.height : 0);
+
+  // Some mobile selfie streams are effectively 4:3 and look too close in cover mode.
+  if (state.isLikelyMobile && aspectRatio > 0.62) {
+    state.cameraFitMode = "contain";
+  } else {
+    state.cameraFitMode = "cover";
+  }
+  els.gameScreen.dataset.cameraFit = state.cameraFitMode;
+
+  if (didApplyZoomOut) {
+    return "Camera ready (wide framing). Tap anywhere to start.";
+  }
+  if (state.cameraFitMode === "contain") {
+    return "Camera ready (fit mode). Tap anywhere to start.";
+  }
+  return "Camera ready. Tap anywhere to start.";
 }
 
 function pickRecordingMimeType() {
@@ -1221,8 +1445,15 @@ async function startRunRecording() {
   if (!stream) {
     return;
   }
+  if (!isRunActive()) {
+    return;
+  }
 
   const { recorderInputStream, hasAudio, hasMic } = await buildRecorderInputStream(stream);
+  if (!isRunActive()) {
+    teardownRecordingAudioMix();
+    return;
+  }
   const preferredMimeType = pickRecordingMimeType();
   let recorder;
   try {
@@ -1444,7 +1675,7 @@ function setupRecognition() {
   state.recognitionSupported = true;
   state.recognition.continuous = false;
   state.recognition.interimResults = true;
-  state.recognition.maxAlternatives = 4;
+  state.recognition.maxAlternatives = 2;
 
   state.recognition.onstart = () => {
     state.listening = true;
@@ -1473,12 +1704,14 @@ function setupRecognition() {
     }
 
     if (interim.trim()) {
-      els.heardText.textContent = interim.trim();
+      const interimText = interim.trim();
+      els.heardText.textContent = interimText;
+      evaluateAnswerCandidates([interimText], { allowMiss: false });
     }
 
     if (finalCandidates.length) {
       state.run.heardFinalInRound = true;
-      evaluateAnswerCandidates(finalCandidates);
+      evaluateAnswerCandidates(finalCandidates, { allowMiss: true });
     }
   };
 
@@ -1563,27 +1796,39 @@ function isSkipCommand(candidate) {
   if (!candidate) {
     return false;
   }
-  const skipCommands = ["skip", "дальше", "далее"];
-  return skipCommands.some((command) => candidate === command || candidate.includes(command));
+  return SKIP_COMMANDS.some((command) => candidate === command || candidate.includes(command));
 }
 
-function isCorrectAnswer(candidate, answers) {
+function prepareAnswerVariants(answers) {
+  return answers
+    .map((answer) => normalizeText(answer))
+    .filter(Boolean)
+    .map((normalized) => ({
+      normalized,
+      compact: compactText(normalized),
+      hasCyrillic: /[а-яё]/i.test(normalized),
+      hasLatin: /[a-z]/i.test(normalized),
+      maxDistance: allowedDistance(normalized.length)
+    }));
+}
+
+function isCorrectAnswer(candidate, preparedAnswers) {
   if (!candidate) {
     return false;
   }
+  if (!preparedAnswers.length) {
+    return false;
+  }
 
-  const normalizedAnswers = answers.map((answer) => normalizeText(answer));
   const compactCandidate = compactText(candidate);
 
-  for (const normalizedAnswer of normalizedAnswers) {
-    if (!normalizedAnswer) {
-      continue;
-    }
-
-    const alignedCandidate = alignToAnswerScript(candidate, normalizedAnswer);
+  for (const answer of preparedAnswers) {
+    const normalizedAnswer = answer.normalized;
+    const compactAnswer = answer.compact;
+    const alignedCandidate = alignToAnswerScript(candidate, answer);
     const chunks = splitCandidate(alignedCandidate);
-    const compactAnswer = compactText(normalizedAnswer);
     const compactAligned = compactText(alignedCandidate);
+    const maxDistance = answer.maxDistance;
 
     if (alignedCandidate === normalizedAnswer || alignedCandidate.includes(normalizedAnswer)) {
       return true;
@@ -1602,17 +1847,26 @@ function isCorrectAnswer(candidate, answers) {
       if (compactText(chunk) === compactAnswer) {
         return true;
       }
-      if (levenshtein(chunk, normalizedAnswer) <= allowedDistance(normalizedAnswer.length)) {
+      if (Math.abs(chunk.length - normalizedAnswer.length) > maxDistance) {
+        continue;
+      }
+      if (levenshtein(chunk, normalizedAnswer) <= maxDistance) {
         return true;
       }
     }
 
-    if (levenshtein(alignedCandidate, normalizedAnswer) <= allowedDistance(normalizedAnswer.length + 1)) {
+    if (
+      Math.abs(alignedCandidate.length - normalizedAnswer.length) <= maxDistance + 1 &&
+      levenshtein(alignedCandidate, normalizedAnswer) <= maxDistance + 1
+    ) {
       return true;
     }
     if (compactCandidate && compactAnswer) {
+      if (Math.abs(compactCandidate.length - compactAnswer.length) > maxDistance + 1) {
+        continue;
+      }
       const compactDistance = levenshtein(compactCandidate, compactAnswer);
-      if (compactDistance <= allowedDistance(compactAnswer.length)) {
+      if (compactDistance <= maxDistance + 1) {
         return true;
       }
     }
@@ -1626,10 +1880,10 @@ function compactText(text) {
 }
 
 function alignToAnswerScript(candidate, answer) {
-  if (/[а-яё]/i.test(answer)) {
+  if (answer.hasCyrillic) {
     return convertLatinLookalikesToCyrillic(candidate);
   }
-  if (/[a-z]/i.test(answer)) {
+  if (answer.hasLatin) {
     return convertCyrillicLookalikesToLatin(candidate);
   }
   return candidate;
@@ -1712,26 +1966,25 @@ function levenshtein(a, b) {
     return a.length;
   }
 
-  const matrix = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
-  for (let i = 0; i <= a.length; i += 1) {
-    matrix[i][0] = i;
-  }
+  const prev = new Array(b.length + 1);
+  const curr = new Array(b.length + 1);
+
   for (let j = 0; j <= b.length; j += 1) {
-    matrix[0][j] = j;
+    prev[j] = j;
   }
 
   for (let i = 1; i <= a.length; i += 1) {
+    curr[0] = i;
     for (let j = 1; j <= b.length; j += 1) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      matrix[i][j] = Math.min(
-        matrix[i - 1][j] + 1,
-        matrix[i][j - 1] + 1,
-        matrix[i - 1][j - 1] + cost
-      );
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= b.length; j += 1) {
+      prev[j] = curr[j];
     }
   }
 
-  return matrix[a.length][b.length];
+  return prev[b.length];
 }
 
 function pickWords(items, count) {
@@ -1815,6 +2068,7 @@ function renderLeaderboard() {
     els.leaderboardList.innerHTML = `
       <li class="leaderboard-empty">No runs yet. Your first run sets the pace.</li>
     `;
+    updateChallengeCopy();
     return;
   }
 
@@ -1840,6 +2094,7 @@ function renderLeaderboard() {
       `;
     })
     .join("");
+  updateChallengeCopy();
 }
 
 function ensureAudioContext() {
@@ -1902,6 +2157,40 @@ function playSuccessSound() {
 
 function playFailSound() {
   playTone({ frequency: 240, duration: 0.18, gain: 0.05, type: "sawtooth", sweepTo: 125 });
+}
+
+function playSkipSound() {
+  playTone({ frequency: 330, duration: 0.06, gain: 0.04, type: "square" });
+  playTone({ frequency: 280, duration: 0.08, gain: 0.04, type: "square", when: 0.05 });
+}
+
+function playRunStartSound() {
+  playTone({ frequency: 420, duration: 0.05, gain: 0.04, type: "triangle" });
+  playTone({ frequency: 560, duration: 0.06, gain: 0.05, type: "triangle", when: 0.06 });
+  playTone({ frequency: 720, duration: 0.1, gain: 0.055, type: "triangle", when: 0.12 });
+}
+
+function playStreakSound(streak) {
+  const capped = Math.min(streak, 10);
+  const base = 520 + capped * 24;
+  playTone({ frequency: base, duration: 0.06, gain: 0.035, type: "triangle" });
+}
+
+function playMilestoneSound(streak) {
+  const base = 620 + Math.min(streak, 12) * 10;
+  playTone({ frequency: base, duration: 0.08, gain: 0.05, type: "triangle" });
+  playTone({ frequency: base * 1.25, duration: 0.09, gain: 0.055, type: "triangle", when: 0.06 });
+  playTone({ frequency: base * 1.55, duration: 0.12, gain: 0.06, type: "triangle", when: 0.13 });
+}
+
+function playWarningTickSound(wholeLeft) {
+  const isFinalSecond = wholeLeft <= 1;
+  playTone({
+    frequency: isFinalSecond ? 940 : 760,
+    duration: isFinalSecond ? 0.05 : 0.04,
+    gain: isFinalSecond ? 0.045 : 0.03,
+    type: "square"
+  });
 }
 
 function vibrate(pattern) {

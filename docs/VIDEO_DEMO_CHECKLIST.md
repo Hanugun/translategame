@@ -15,7 +15,7 @@ Goal: record a vertical clip where gameplay and your face are visible at the sam
 1. Start system screen recording on the phone.
 2. Enter game screen and `Tap anywhere to start`.
 3. Speak translations quickly and clearly.
-4. Use at least one `skip`/`dalshe` (`дальше`) moment to show the mechanic.
+4. Use at least one `skip`/`dalshe` moment to show the mechanic.
 5. Include both:
    - several correct answers in a row (streak growth)
    - at least one miss (to show risk/tension)
@@ -24,9 +24,9 @@ Goal: record a vertical clip where gameplay and your face are visible at the sam
 
 ## 3. Recommended 20-30s structure
 
-1. 0-3s: Hook shot on `Home` or game start overlay.
-2. 3-14s: Fast streak build, visible score growth.
-3. 14-18s: One miss / life loss reaction.
+1. 0-3s: Hook shot on `Home` challenge text or game start overlay.
+2. 3-14s: Fast streak build, visible score growth, combo bursts.
+3. 14-18s: One miss / life-loss reaction.
 4. 18-25s: Recovery and final push.
 5. 25-30s: End card with score + CTA.
 

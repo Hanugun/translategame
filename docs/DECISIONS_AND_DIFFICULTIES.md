@@ -29,6 +29,23 @@
    - Kept reliable fallback: save file locally, then upload in app.
 6. Inconsistent tab-audio capture in browser recording.
    - Added internal recording audio mix (game SFX + best-effort mic) to avoid silent clips.
+7. Mobile selfie camera looked too zoomed on some devices.
+   - Added dynamic framing strategy (`cover` vs `contain`) based on actual track aspect ratio.
+   - Applied device capability-based zoom-out when supported (`track.applyConstraints` with `zoom`).
+8. Recording bootstrap could delay first round start.
+   - Removed blocking await from run start path.
+   - Recording now starts in background while gameplay begins instantly.
+9. Voice loop responsiveness on mobile.
+   - Reduced mic warmup delay and auto-retry delay to shorten dead time between user speech and capture restart.
+
+## Trend heuristics used
+
+1. Front-load a clear challenge hook in first seconds.
+   - Implemented explicit target-score hook on home + ready overlay.
+2. Keep motion/feedback high-frequency during gameplay.
+   - Added combo bursts, streak milestones, urgency audio ticks, stronger fail/recover beats.
+3. Make end-state shareable and competitive.
+   - Finish screen now emphasizes challenge outcome and immediate save/share actions.
 
 ## Remaining known constraints
 
